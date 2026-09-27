@@ -8,12 +8,14 @@ from rich.console import Console
 from rich.table import Table
 
 from video_learning.core.models import UNKNOWN, MediaInfo
+from video_learning.core.timeline import OcrEvent
 from video_learning.core.transcript import (
     CapabilityItem,
     TranscriptionCapability,
     TranscriptResult,
 )
 from video_learning.services.analyze_service import AnalyzeResult
+from video_learning.services.report_service import ReportResult
 
 
 def _fmt(value: object, pattern: str = "{}") -> str:
@@ -213,4 +215,91 @@ def render_ocr_artifact_saved(console: Console, path: Path, result: AnalyzeResul
         "[dim]Read-only — the source video is unchanged; the full OCR text and its "
         "derived suggestions are persisted for audit (no renaming, no keywords "
         "invented).[/dim]"
+    )
+
+
+def render_report(
+    console: Console, result: ReportResult, artifact_path: Path | None = None
+) -> None:
+    """Render a concise, human-readable unified report (metadata + evidence).
+
+    The timeline shows each OCR point as a short preview and each speech interval
+    in full; the complete OCR text is retained in the ``--json``/``--out`` report,
+    never dumped here. No relationship between OCR and speech is implied.
+    """
+    media = result.media
+    analysis = result.analysis
+
+    _section(console, "VIDEO REPORT")
+    console.print(f"[bold]File:[/bold] {media.filename}")
+    console.print(f"[dim]{media.path}[/dim]")
+    console.print()
+
+    _section(console, "Metadata")
+    console.print(f"[bold]Duration:[/bold] {_fmt_duration(media.duration_seconds)}")
+    if media.video is not None:
+        dimensions = (
+            f"{media.video.width}x{media.video.height}"
+            if media.video.width is not None and media.video.height is not None
+            else UNKNOWN
+        )
+        console.print(
+            f"[bold]Video:[/bold]    {_fmt(media.video.codec)} · {dimensions} · "
+            f"{_fmt(media.video.frame_rate, '{:.3f} fps')}"
+        )
+    else:
+        console.print("[bold]Video:[/bold]    none")
+    if media.audio is not None:
+        console.print(
+            f"[bold]Audio:[/bold]    {_fmt(media.audio.codec)} · "
+            f"{_fmt(media.audio.sample_rate, '{} Hz')} · {_fmt(media.audio.channels)} ch"
+        )
+    else:
+        console.print("[bold]Audio:[/bold]    none")
+    console.print()
+
+    _section(console, "OCR")
+    console.print(f"[bold]Snapshots:[/bold]      {analysis.frames_analyzed}")
+    console.print(f"[bold]OCR characters:[/bold] {analysis.ocr_text_chars}")
+    phrases = ", ".join(phrase.phrase for phrase in analysis.phrases[:6]) or "(none)"
+    keywords = ", ".join(keyword.term for keyword in analysis.keywords[:10]) or "(none)"
+    console.print(f"[bold]Phrases:[/bold]       {phrases}")
+    console.print(f"[bold]Keywords:[/bold]      {keywords}")
+    console.print()
+
+    _section(console, "Transcription")
+    console.print(f"[bold]Status:[/bold] {result.transcription_status}")
+    transcript = result.transcription
+    if transcript is not None:
+        console.print(f"[bold]Backend:[/bold]  {transcript.backend}")
+        console.print(f"[bold]Model:[/bold]    {transcript.model}")
+        console.print(f"[bold]Language:[/bold] {transcript.language}")
+        console.print(f"[bold]Segments:[/bold] {transcript.segment_count}")
+    elif result.transcription_detail:
+        console.print(f"[dim]{result.transcription_detail}[/dim]")
+    console.print()
+
+    _section(console, "UNIFIED TIMELINE")
+    if not result.timeline:
+        console.print("[dim](no evidence)[/dim]")
+    for event in result.timeline:
+        if isinstance(event, OcrEvent):
+            stamp = _fmt_timestamp(event.timestamp_seconds)
+            preview = _ocr_preview(event.text)
+            console.print(f"[cyan]{stamp}[/cyan]  [magenta]OCR[/magenta]     {preview}")
+        else:
+            start = _fmt_timestamp(event.start_seconds)
+            end = _fmt_timestamp(event.end_seconds)
+            console.print(
+                f"[cyan]{start}[/cyan] → [cyan]{end}[/cyan]  "
+                f"[green]SPEECH[/green]  {event.text}"
+            )
+    console.print()
+
+    if artifact_path is not None:
+        console.print(f"[dim]Artifact written: {artifact_path}[/dim]")
+    console.print(
+        "[dim]Read-only — source unchanged; metadata, OCR, and transcription evidence "
+        "combined into one chronological timeline (no renaming, no semantic "
+        "alignment).[/dim]"
     )

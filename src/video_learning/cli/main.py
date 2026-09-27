@@ -22,6 +22,7 @@ from video_learning.cli.render import (
     render_analysis,
     render_media_info,
     render_ocr_artifact_saved,
+    render_report,
     render_transcript,
     render_transcription_capability,
 )
@@ -29,6 +30,7 @@ from video_learning.core.errors import VideoLearningError
 from video_learning.services.analyze_service import AnalyzeService
 from video_learning.services.inspect_service import InspectService
 from video_learning.services.ocr_snapshot_store import OcrSnapshotStore
+from video_learning.services.report_service import ReportService, ReportStore
 from video_learning.services.transcribe_service import TranscribeService
 
 app = typer.Typer(
@@ -247,3 +249,68 @@ def save_ocr(
         )
     else:
         render_ocr_artifact_saved(console, artifact_path, result)
+
+
+@app.command()
+def report(
+    video: Path = typer.Argument(
+        ...,
+        exists=False,  # validated by the service so errors stay user-facing
+        help="Path to a local video file.",
+    ),
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help="Write the report as a deterministic JSON artifact to this path.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the machine-readable report instead of the readable summary."
+    ),
+    model: Path | None = typer.Option(
+        None,
+        "--model",
+        help=(
+            "Path to a whisper.cpp ggml model file for transcription "
+            "(defaults to $VLS_WHISPER_MODEL). Never downloaded automatically."
+        ),
+    ),
+) -> None:
+    """Combine metadata, OCR, and transcription into one chronological report.
+
+    Reuses the existing inspect/analyze/transcribe services (read-only) and merges
+    OCR snapshots (points) with transcript segments (intervals) into a unified
+    timeline. It never modifies the source, never downloads a model, and never
+    falls back to a cloud API. If the video has no audio, or the local whisper.cpp
+    backend/model is unavailable, that is reported explicitly and the metadata and
+    OCR evidence remain useful. With ``--out`` a deterministic JSON artifact
+    (``video-learning.report/v1``) is written; ``--json`` prints that same report.
+    """
+    whisper = WhisperCpp()
+    service = ReportService(
+        inspect_service=InspectService(probe=FfprobeMediaProbe()),
+        analyze_service=AnalyzeService(
+            inspect_service=InspectService(probe=FfprobeMediaProbe()),
+            frame_extractor=FfmpegFrameExtractor(),
+            ocr=TesseractOcr(),
+        ),
+        transcribe_service=TranscribeService(
+            inspect_service=InspectService(probe=FfprobeMediaProbe()),
+            audio_extractor=FfmpegAudioExtractor(),
+            whisper=whisper,
+        ),
+        whisper=whisper,
+    )
+    store = ReportStore()
+    try:
+        result = service.build(video, model=model)
+        artifact_path = store.save(result, out) if out is not None else None
+    except VideoLearningError as exc:
+        error_console.print(f"Error: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        # Exactly the report model — no CLI-only fields. The --out artifact is a
+        # side effect (confirmed in the readable summary), not part of --json.
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        render_report(console, result, artifact_path)

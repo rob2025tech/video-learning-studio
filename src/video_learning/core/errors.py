@@ -73,3 +73,7 @@ class WhisperExecutionError(TranscriptionError):
 
 class OcrArtifactError(VideoLearningError):
     """An OCR-evidence artifact could not be written, read, or parsed (Stage 0F)."""
+
+
+class ReportArtifactError(VideoLearningError):
+    """A combined report artifact could not be written (Stage 0G)."""
