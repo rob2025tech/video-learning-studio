@@ -89,11 +89,11 @@ def render_media_info(console: Console, info: MediaInfo) -> None:
 
 
 def render_analysis(console: Console, result: AnalyzeResult) -> None:
-    """Render auditable snapshots plus suggested keywords (proposal only).
+    """Render auditable snapshots plus suggested phrases and keywords.
 
     Each snapshot shows the sampled timestamp and a concise OCR preview so the
     user can line it up against the source video; the complete OCR text is
-    retained in the ``--json`` output.
+    retained in the ``--json`` output. Proposal only.
     """
     console.print(f"Video: {result.source.name}")
     console.print()
@@ -105,6 +105,13 @@ def render_analysis(console: Console, result: AnalyzeResult) -> None:
             stamp = _fmt_timestamp(snapshot.timestamp_seconds)
             preview = _ocr_preview(snapshot.ocr_text)
             console.print(f"- [cyan]{stamp}[/cyan]  {preview}")
+    console.print()
+    console.print("Suggested phrases:")
+    if not result.phrases:
+        console.print("[dim](none)[/dim]")
+    else:
+        for phrase in result.phrases:
+            console.print(f"- {phrase.phrase}")
     console.print()
     console.print("Suggested keywords:")
     if not result.keywords:

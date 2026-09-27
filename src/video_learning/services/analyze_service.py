@@ -1,9 +1,9 @@
-"""Content-analysis use case: video -> suggested descriptive keywords.
+"""Content-analysis use case: video -> suggested keywords and phrases.
 
 Proposal-only and non-destructive. It reads a few sampled frames into a
-temporary directory, OCRs them, ranks the observed words, and returns
-suggestions. It never renames, moves, copies, or writes to the source media,
-and it never invents keywords that did not appear on screen.
+temporary directory, OCRs them, ranks the observed words and phrases, and
+returns suggestions. It never renames, moves, copies, or writes to the source
+media, and it never invents terms that did not appear on screen.
 
 This layer deliberately has no provider abstractions yet: it wires the concrete
 Stage 0B adapters directly. A seam is introduced only when a second real
@@ -19,7 +19,12 @@ from typing import Any
 
 from video_learning.adapters.ffmpeg_frames import FfmpegFrameExtractor
 from video_learning.adapters.tesseract_ocr import TesseractOcr
-from video_learning.core.keywords import KeywordSuggestion, suggest_keywords
+from video_learning.core.keywords import (
+    KeywordSuggestion,
+    PhraseSuggestion,
+    suggest_keywords,
+    suggest_phrases,
+)
 from video_learning.services.inspect_service import InspectService
 
 
@@ -47,6 +52,7 @@ class AnalyzeResult:
 
     source: Path
     keywords: list[KeywordSuggestion] = field(default_factory=list)
+    phrases: list[PhraseSuggestion] = field(default_factory=list)
     snapshots: list[FrameSnapshot] = field(default_factory=list)
     frames_analyzed: int = 0
     ocr_text_chars: int = 0
@@ -56,6 +62,7 @@ class AnalyzeResult:
             "source": str(self.source),
             "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
             "keywords": [kw.to_dict() for kw in self.keywords],
+            "phrases": [phrase.to_dict() for phrase in self.phrases],
             "frames_analyzed": self.frames_analyzed,
             "ocr_text_chars": self.ocr_text_chars,
             # Explicit guarantees for this stage.
@@ -94,9 +101,12 @@ class AnalyzeService:
 
         combined = "\n".join(snapshot.ocr_text for snapshot in snapshots)
         keywords = suggest_keywords(combined)
+        # Reuse the same OCR text for phrases; no second OCR pass is performed.
+        phrases = suggest_phrases(combined)
         return AnalyzeResult(
             source=path,
             keywords=keywords,
+            phrases=phrases,
             snapshots=snapshots,
             frames_analyzed=len(snapshots),
             ocr_text_chars=len(combined.strip()),

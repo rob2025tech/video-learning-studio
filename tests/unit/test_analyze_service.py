@@ -150,6 +150,54 @@ def test_no_text_yields_empty_keywords(tmp_path: Path) -> None:
     assert result.frames_analyzed == 1
 
 
+def test_phrases_populated_from_same_ocr_text(tmp_path: Path) -> None:
+    video = tmp_path / "clip.mov"
+    video.write_bytes(b"x")
+    service, _, _, _ = _service(
+        tmp_path,
+        {
+            "frame_000.png": "Release Notes\nQoder Model Usage",
+            "frame_001.png": "Release Notes\nQoder Model Usage",
+        },
+        ["frame_000.png", "frame_001.png"],
+    )
+
+    result = service.analyze(video)
+
+    phrases = [p.phrase for p in result.phrases]
+    assert "Release Notes" in phrases
+    assert "Qoder Model Usage" in phrases
+    # Existing keyword behaviour is unchanged and drawn from the same text.
+    assert "Qoder" in [kw.term for kw in result.keywords]
+    # Snapshots remain intact (no second OCR pass, no behaviour change).
+    assert [s.timestamp_seconds for s in result.snapshots] == [0.0, 1.0]
+
+
+def test_result_dict_exposes_phrases_and_preserves_fields(tmp_path: Path) -> None:
+    video = tmp_path / "clip.mov"
+    video.write_bytes(b"x")
+    service, _, _, _ = _service(
+        tmp_path,
+        {"frame_000.png": "Release Notes", "frame_001.png": "Release Notes"},
+        ["frame_000.png", "frame_001.png"],
+    )
+
+    payload = service.analyze(video).to_dict()
+
+    assert {"phrase": "Release Notes", "count": 2} in payload["phrases"]
+    for key in (
+        "source",
+        "snapshots",
+        "keywords",
+        "frames_analyzed",
+        "ocr_text_chars",
+        "renamed",
+        "applied",
+        "source_modified",
+    ):
+        assert key in payload
+
+
 def test_missing_file_raises_before_any_work(tmp_path: Path) -> None:
     service, probe, extractor, ocr = _service(tmp_path, {}, ["frame_000.png"])
 

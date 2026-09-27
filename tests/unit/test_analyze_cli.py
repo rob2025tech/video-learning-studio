@@ -10,7 +10,7 @@ from typer.testing import CliRunner
 
 from video_learning.cli.main import app
 from video_learning.core.errors import AnalysisToolMissingError
-from video_learning.core.keywords import KeywordSuggestion
+from video_learning.core.keywords import KeywordSuggestion, PhraseSuggestion
 from video_learning.services.analyze_service import AnalyzeResult, AnalyzeService, FrameSnapshot
 
 runner = CliRunner()
@@ -88,3 +88,47 @@ def test_analyze_tool_missing_exits_1(tmp_path: Path) -> None:
 
     assert result.exit_code == 1
     assert "tesseract" in result.output
+
+
+def _result_with_phrases(source: Path) -> AnalyzeResult:
+    return AnalyzeResult(
+        source=source,
+        keywords=[KeywordSuggestion("Qoder", 4)],
+        phrases=[PhraseSuggestion("Qoder Model Usage", 4), PhraseSuggestion("Release Notes", 3)],
+        snapshots=[FrameSnapshot(12.4, "Qoder Model Usage\nRelease Notes")],
+        frames_analyzed=1,
+        ocr_text_chars=40,
+    )
+
+
+def test_analyze_human_readable_shows_phrases_and_keywords(tmp_path: Path) -> None:
+    video = tmp_path / "sample.mov"
+    video.write_bytes(b"x")
+    with patch.object(AnalyzeService, "analyze", return_value=_result_with_phrases(video)):
+        result = runner.invoke(app, ["analyze", str(video)])
+
+    assert result.exit_code == 0, result.output
+    assert "Suggested phrases:" in result.output
+    assert "- Qoder Model Usage" in result.output
+    assert "- Release Notes" in result.output
+    # Existing keyword output remains intact.
+    assert "Suggested keywords:" in result.output
+    assert "- Qoder" in result.output
+
+
+def test_analyze_json_contains_phrases(tmp_path: Path) -> None:
+    video = tmp_path / "sample.mov"
+    video.write_bytes(b"x")
+    with patch.object(AnalyzeService, "analyze", return_value=_result_with_phrases(video)):
+        result = runner.invoke(app, ["analyze", str(video), "--json"])
+
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data["phrases"] == [
+        {"phrase": "Qoder Model Usage", "count": 4},
+        {"phrase": "Release Notes", "count": 3},
+    ]
+    assert data["keywords"] == [{"term": "Qoder", "count": 4}]
+    assert data["renamed"] is False
+    assert data["applied"] is False
+    assert data["source_modified"] is False

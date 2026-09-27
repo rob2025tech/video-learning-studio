@@ -82,3 +82,6 @@ def test_real_pipeline_reads_on_screen_text(text_video: Path) -> None:
     assert all(s.ocr_text for s in result.snapshots)
     # At least one of the large rendered words should be recovered by OCR.
     assert lowered & {"qoder", "terminal", "coding"}, result.keywords
+    # Stage 0D: the real pipeline also exposes a deterministic phrase list.
+    assert isinstance(result.phrases, list)
+    assert "phrases" in result.to_dict()
