@@ -69,3 +69,7 @@ class TranscriptionModelMissingError(TranscriptionError):
 
 class WhisperExecutionError(TranscriptionError):
     """whisper.cpp ran but failed, timed out, or produced unparsable output."""
+
+
+class OcrArtifactError(VideoLearningError):
+    """An OCR-evidence artifact could not be written, read, or parsed (Stage 0F)."""

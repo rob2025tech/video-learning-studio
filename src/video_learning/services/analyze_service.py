@@ -45,6 +45,14 @@ class FrameSnapshot:
             "ocr_text": self.ocr_text,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> FrameSnapshot:
+        """Inverse of :meth:`to_dict` (used to reload persisted OCR evidence)."""
+        return cls(
+            timestamp_seconds=data["timestamp_seconds"],
+            ocr_text=data["ocr_text"],
+        )
+
 
 @dataclass(frozen=True)
 class AnalyzeResult:
@@ -70,6 +78,22 @@ class AnalyzeResult:
             "applied": False,
             "source_modified": False,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> AnalyzeResult:
+        """Reconstruct a result from a persisted artifact (inverse of to_dict).
+
+        The complete OCR text and its timestamp binding are restored verbatim so
+        reloaded evidence stays auditable; nothing is re-derived or dropped.
+        """
+        return cls(
+            source=Path(data["source"]),
+            keywords=[KeywordSuggestion.from_dict(item) for item in data.get("keywords", [])],
+            phrases=[PhraseSuggestion.from_dict(item) for item in data.get("phrases", [])],
+            snapshots=[FrameSnapshot.from_dict(item) for item in data.get("snapshots", [])],
+            frames_analyzed=data.get("frames_analyzed", 0),
+            ocr_text_chars=data.get("ocr_text_chars", 0),
+        )
 
 
 class AnalyzeService:

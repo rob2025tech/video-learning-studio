@@ -56,6 +56,11 @@ class KeywordSuggestion:
     def to_dict(self) -> dict[str, Any]:
         return {"term": self.term, "count": self.count}
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> KeywordSuggestion:
+        """Inverse of :meth:`to_dict` (used to reload persisted OCR evidence)."""
+        return cls(term=data["term"], count=data["count"])
+
 
 def suggest_keywords(
     text: str,
@@ -132,6 +137,11 @@ class PhraseSuggestion:
 
     def to_dict(self) -> dict[str, Any]:
         return {"phrase": self.phrase, "count": self.count}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PhraseSuggestion:
+        """Inverse of :meth:`to_dict` (used to reload persisted OCR evidence)."""
+        return cls(phrase=data["phrase"], count=data["count"])
 
 
 def _phrase_rank_key(suggestion: PhraseSuggestion) -> tuple[int, int, int, str]:

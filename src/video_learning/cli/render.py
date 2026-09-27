@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from rich.console import Console
 from rich.table import Table
 
@@ -190,4 +192,25 @@ def render_transcript(console: Console, result: TranscriptResult) -> None:
     console.print(
         "[dim]Read-only — source unchanged; the transcript is evidence for the "
         "human (no files renamed, nothing persisted).[/dim]"
+    )
+
+
+def render_ocr_artifact_saved(console: Console, path: Path, result: AnalyzeResult) -> None:
+    """Confirm OCR snapshot evidence was persisted to a local artifact."""
+    _section(console, "OCR evidence saved")
+    console.print(f"[bold]Artifact:[/bold]  {path}")
+    console.print(f"[bold]Source:[/bold]    {result.source.name}")
+    console.print(
+        f"[bold]Snapshots:[/bold] {result.frames_analyzed} "
+        f"(complete OCR text preserved; {result.ocr_text_chars} chars)"
+    )
+    console.print(
+        f"[bold]Derived:[/bold]   {len(result.phrases)} phrases, "
+        f"{len(result.keywords)} keywords"
+    )
+    console.print()
+    console.print(
+        "[dim]Read-only — the source video is unchanged; the full OCR text and its "
+        "derived suggestions are persisted for audit (no renaming, no keywords "
+        "invented).[/dim]"
     )

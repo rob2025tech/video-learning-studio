@@ -25,6 +25,32 @@ yours to keep.
 No new Python dependencies are introduced: `ffmpeg` and `tesseract` are used as
 external system binaries via subprocess, the same pattern as `ffprobe`.
 
+## Stage 0F — OCR snapshot persistence
+
+`save-ocr` persists the OCR evidence to a local, auditable JSON artifact so a
+human can later trace any suggested phrase or keyword back through
+`video -> snapshot timestamp -> original OCR text`.
+
+```
+video-learning save-ocr "/path/to/video.mov" --out "/path/to/evidence.json"
+video-learning save-ocr "/path/to/video.mov" --out "/path/to/evidence.json" --json
+```
+
+It runs the same read-only analysis as `analyze` (`ffmpeg` + `tesseract`) and
+writes the **complete** OCR text of every timestamped snapshot alongside the
+deterministic phrases/keywords already derived from that same text. The result is
+a single schema-tagged JSON document (`video-learning.ocr-snapshots/v1`) that is:
+
+- **deterministic** — stable ordering with no wall-clock timestamps or random
+  IDs, so the same video yields byte-identical output;
+- **non-destructive** — the source video is never renamed, moved, or modified;
+- **complete** — the full OCR text is preserved, never replaced by suggestions.
+
+No database, cloud storage, or new Python dependency is introduced; the artifact
+is an ordinary local file. `--out` is required, and its parent directories are
+created if missing. The complete OCR text and its derived suggestions come from
+the same OCR pass, so nothing is re-extracted.
+
 ## Requirements
 
 - Python 3.11+

@@ -21,12 +21,14 @@ from video_learning.adapters.whisper_cpp import WhisperCpp
 from video_learning.cli.render import (
     render_analysis,
     render_media_info,
+    render_ocr_artifact_saved,
     render_transcript,
     render_transcription_capability,
 )
 from video_learning.core.errors import VideoLearningError
 from video_learning.services.analyze_service import AnalyzeService
 from video_learning.services.inspect_service import InspectService
+from video_learning.services.ocr_snapshot_store import OcrSnapshotStore
 from video_learning.services.transcribe_service import TranscribeService
 
 app = typer.Typer(
@@ -188,3 +190,60 @@ def transcribe_audio(
     else:
         render_transcription_capability(console, capability)
         render_transcript(console, result)
+
+
+@app.command(name="save-ocr")
+def save_ocr(
+    video: Path = typer.Argument(
+        ...,
+        exists=False,  # validated by the service so errors stay user-facing
+        help="Path to a local video file.",
+    ),
+    out: Path = typer.Option(
+        ...,
+        "--out",
+        help="Destination JSON artifact for the persisted OCR snapshot evidence.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print a machine-readable receipt instead of the readable summary."
+    ),
+) -> None:
+    """Persist OCR snapshot evidence to a local, auditable JSON artifact.
+
+    Runs the same read-only analysis as ``analyze`` (ffmpeg + tesseract) and
+    writes the complete OCR text of each timestamped snapshot plus the phrases
+    and keywords derived from that same text. The source video is never
+    modified, the complete OCR text is never replaced by suggestions, and the
+    artifact is deterministic (stable ordering, no wall-clock timestamps).
+    """
+    service = AnalyzeService(
+        inspect_service=InspectService(probe=FfprobeMediaProbe()),
+        frame_extractor=FfmpegFrameExtractor(),
+        ocr=TesseractOcr(),
+    )
+    store = OcrSnapshotStore()
+    try:
+        result = service.analyze(video)
+        artifact_path = store.save(result, out)
+    except VideoLearningError as exc:
+        error_console.print(f"Error: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    if json_output:
+        # Plain print keeps stdout strictly valid JSON (rich may wrap/colorize).
+        print(
+            json.dumps(
+                {
+                    "schema": store.schema,
+                    "artifact_path": str(artifact_path),
+                    "source": str(result.source),
+                    "snapshots_saved": len(result.snapshots),
+                    "phrases": len(result.phrases),
+                    "keywords": len(result.keywords),
+                    "source_modified": False,
+                },
+                indent=2,
+            )
+        )
+    else:
+        render_ocr_artifact_saved(console, artifact_path, result)
