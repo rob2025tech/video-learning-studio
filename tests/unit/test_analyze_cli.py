@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 from video_learning.cli.main import app
 from video_learning.core.errors import AnalysisToolMissingError
 from video_learning.core.keywords import KeywordSuggestion
-from video_learning.services.analyze_service import AnalyzeResult, AnalyzeService
+from video_learning.services.analyze_service import AnalyzeResult, AnalyzeService, FrameSnapshot
 
 runner = CliRunner()
 
@@ -20,7 +20,11 @@ def _result(source: Path) -> AnalyzeResult:
     return AnalyzeResult(
         source=source,
         keywords=[KeywordSuggestion("Qoder", 4), KeywordSuggestion("terminal", 2)],
-        frames_analyzed=5,
+        snapshots=[
+            FrameSnapshot(12.4, "Projects Templates video-learning-studio"),
+            FrameSnapshot(227.1, "Qoder Model Usage\nRelease Notes"),
+        ],
+        frames_analyzed=2,
         ocr_text_chars=128,
     )
 
@@ -33,6 +37,10 @@ def test_analyze_human_readable(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "Video: sample.mov" in result.output
+    assert "OCR snapshots:" in result.output
+    # Each snapshot's timestamp is visible and formatted for QuickTime comparison.
+    assert "00:00:12.4" in result.output
+    assert "00:03:47.1" in result.output
     assert "Suggested keywords:" in result.output
     assert "- Qoder" in result.output
     assert "- terminal" in result.output
@@ -47,6 +55,10 @@ def test_analyze_json_output(tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert data["source"] == str(video)
+    assert data["snapshots"] == [
+        {"timestamp_seconds": 12.4, "ocr_text": "Projects Templates video-learning-studio"},
+        {"timestamp_seconds": 227.1, "ocr_text": "Qoder Model Usage\nRelease Notes"},
+    ]
     assert data["keywords"] == [
         {"term": "Qoder", "count": 4},
         {"term": "terminal", "count": 2},

@@ -74,5 +74,11 @@ def test_real_pipeline_reads_on_screen_text(text_video: Path) -> None:
 
     lowered = {kw.term.lower() for kw in result.keywords}
     assert result.frames_analyzed >= 1
+    # Snapshots carry real, ordered, non-negative timestamps for auditing.
+    assert len(result.snapshots) == result.frames_analyzed
+    stamps = [s.timestamp_seconds for s in result.snapshots]
+    assert stamps == sorted(stamps)
+    assert all(t >= 0.0 for t in stamps)
+    assert all(s.ocr_text for s in result.snapshots)
     # At least one of the large rendered words should be recovered by OCR.
     assert lowered & {"qoder", "terminal", "coding"}, result.keywords

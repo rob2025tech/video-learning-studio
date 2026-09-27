@@ -29,6 +29,29 @@ def _fmt_modified(info: MediaInfo) -> str:
     return info.modified_at.astimezone().strftime("%Y-%m-%d %H:%M:%S %z")
 
 
+def _fmt_timestamp(seconds: float) -> str:
+    """Format a media offset as HH:MM:SS.s for quick QuickTime comparison.
+
+    Rounding is done on total tenths so a fractional part like .96 carries into
+    the seconds field instead of printing an invalid ".10".
+    """
+    total_tenths = int(round(max(0.0, seconds) * 10))
+    hours, remainder = divmod(total_tenths, 36_000)
+    minutes, remainder = divmod(remainder, 600)
+    secs, tenths = divmod(remainder, 10)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}.{tenths}"
+
+
+def _ocr_preview(text: str, limit: int = 90) -> str:
+    """Collapse OCR text to a single concise line for the readable summary."""
+    collapsed = " ".join(text.split())
+    if not collapsed:
+        return "(no text detected)"
+    if len(collapsed) <= limit:
+        return collapsed
+    return f"{collapsed[: limit - 1].rstrip()}…"
+
+
 def render_media_info(console: Console, info: MediaInfo) -> None:
     table = Table(title=f"Media info: {info.filename}", show_lines=False)
     table.add_column("Field", style="cyan", no_wrap=True)
@@ -66,8 +89,22 @@ def render_media_info(console: Console, info: MediaInfo) -> None:
 
 
 def render_analysis(console: Console, result: AnalyzeResult) -> None:
-    """Render suggested keywords in the plain, readable proposal format."""
+    """Render auditable snapshots plus suggested keywords (proposal only).
+
+    Each snapshot shows the sampled timestamp and a concise OCR preview so the
+    user can line it up against the source video; the complete OCR text is
+    retained in the ``--json`` output.
+    """
     console.print(f"Video: {result.source.name}")
+    console.print()
+    console.print("OCR snapshots:")
+    if not result.snapshots:
+        console.print("[dim](none)[/dim]")
+    else:
+        for snapshot in result.snapshots:
+            stamp = _fmt_timestamp(snapshot.timestamp_seconds)
+            preview = _ocr_preview(snapshot.ocr_text)
+            console.print(f"- [cyan]{stamp}[/cyan]  {preview}")
     console.print()
     console.print("Suggested keywords:")
     if not result.keywords:

@@ -24,17 +24,37 @@ from video_learning.services.inspect_service import InspectService
 
 
 @dataclass(frozen=True)
+class FrameSnapshot:
+    """One sampled frame's timestamp paired with the OCR text read from it.
+
+    This is the audit unit: it lets a user line up
+    ``timestamp -> video frame -> OCR text -> keywords`` against the source.
+    """
+
+    timestamp_seconds: float
+    ocr_text: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "timestamp_seconds": self.timestamp_seconds,
+            "ocr_text": self.ocr_text,
+        }
+
+
+@dataclass(frozen=True)
 class AnalyzeResult:
     """Outcome of analyzing a single video (proposal only)."""
 
     source: Path
     keywords: list[KeywordSuggestion] = field(default_factory=list)
+    snapshots: list[FrameSnapshot] = field(default_factory=list)
     frames_analyzed: int = 0
     ocr_text_chars: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "source": str(self.source),
+            "snapshots": [snapshot.to_dict() for snapshot in self.snapshots],
             "keywords": [kw.to_dict() for kw in self.keywords],
             "frames_analyzed": self.frames_analyzed,
             "ocr_text_chars": self.ocr_text_chars,
@@ -63,14 +83,21 @@ class AnalyzeService:
 
         with tempfile.TemporaryDirectory(prefix="vls-frames-") as tmp:
             frames = self._frames.extract(media, Path(tmp))
-            texts = [self._ocr.extract_text(frame) for frame in frames]
-            frames_analyzed = len(frames)
+            # Keep each frame's timestamp bound to the text OCR'd from it.
+            snapshots = [
+                FrameSnapshot(
+                    timestamp_seconds=frame.timestamp_seconds,
+                    ocr_text=self._ocr.extract_text(frame.image_path),
+                )
+                for frame in frames
+            ]
 
-        combined = "\n".join(texts)
+        combined = "\n".join(snapshot.ocr_text for snapshot in snapshots)
         keywords = suggest_keywords(combined)
         return AnalyzeResult(
             source=path,
             keywords=keywords,
-            frames_analyzed=frames_analyzed,
+            snapshots=snapshots,
+            frames_analyzed=len(snapshots),
             ocr_text_chars=len(combined.strip()),
         )

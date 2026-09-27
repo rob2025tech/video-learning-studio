@@ -79,7 +79,29 @@ def test_extract_happy_path_creates_and_returns_frames(tmp_path: Path) -> None:
         frames = FfmpegFrameExtractor(max_frames=3).extract(_media(tmp_path), out_dir)
 
     assert len(frames) == 3
-    assert all(f.exists() and f.suffix == ".png" for f in frames)
+    assert all(f.image_path.exists() and f.image_path.suffix == ".png" for f in frames)
+
+
+def test_extract_retains_sampling_timestamps(tmp_path: Path) -> None:
+    out_dir = tmp_path / "frames"
+    out_dir.mkdir()
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        Path(command[-1]).write_bytes(b"\x89PNG")
+        return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+    media = _media(tmp_path, duration=10.0)
+    with (
+        patch(WHICH, return_value="/usr/local/bin/ffmpeg"),
+        patch(RUN, side_effect=fake_run),
+    ):
+        frames = FfmpegFrameExtractor(max_frames=5).extract(media, out_dir)
+
+    # Each frame keeps the exact timestamp it was sampled at, in order.
+    assert [f.timestamp_seconds for f in frames] == pytest.approx([1.0, 3.0, 5.0, 7.0, 9.0])
+    assert [f.image_path.name for f in frames] == [
+        "frame_000.png", "frame_001.png", "frame_002.png", "frame_003.png", "frame_004.png",
+    ]
 
 
 def test_extract_ffmpeg_failure_raises(tmp_path: Path) -> None:

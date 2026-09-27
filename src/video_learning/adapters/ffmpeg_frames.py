@@ -1,19 +1,33 @@
 """Frame extraction via the system ``ffmpeg`` binary (already required by Stage 0).
 
 Samples a handful of evenly-spaced frames into a caller-provided directory and
-returns their paths. The source video is only ever read.
+returns them together with the timestamp each was taken at. The source video is
+only ever read.
 """
 
 from __future__ import annotations
 
 import shutil
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from video_learning.core.errors import AnalysisToolMissingError, FrameExtractionError
 from video_learning.core.models import MediaInfo
 
 _FRAME_TIMEOUT_SECONDS = 60
+
+
+@dataclass(frozen=True)
+class ExtractedFrame:
+    """A single sampled frame and the media timestamp it was captured at.
+
+    ``image_path`` points into temporary storage owned by the caller; it is only
+    valid for the lifetime of that directory.
+    """
+
+    timestamp_seconds: float
+    image_path: Path
 
 
 class FfmpegFrameExtractor:
@@ -23,7 +37,7 @@ class FfmpegFrameExtractor:
         self._max_frames = max_frames
         self._max_width = max_width
 
-    def extract(self, media: MediaInfo, out_dir: Path) -> list[Path]:
+    def extract(self, media: MediaInfo, out_dir: Path) -> list[ExtractedFrame]:
         if not media.has_video:
             raise FrameExtractionError(
                 f"'{media.filename}' has no video stream to analyze "
@@ -37,7 +51,7 @@ class FfmpegFrameExtractor:
         timestamps = self._timestamps(media.duration_seconds)
         scale_filter = self._scale_filter(media)
 
-        frames: list[Path] = []
+        frames: list[ExtractedFrame] = []
         for index, seconds in enumerate(timestamps):
             out_path = out_dir / f"frame_{index:03d}.png"
             command = [
@@ -52,7 +66,7 @@ class FfmpegFrameExtractor:
 
             self._run(command, media)
             if out_path.exists():
-                frames.append(out_path)
+                frames.append(ExtractedFrame(timestamp_seconds=seconds, image_path=out_path))
 
         if not frames:
             raise FrameExtractionError(

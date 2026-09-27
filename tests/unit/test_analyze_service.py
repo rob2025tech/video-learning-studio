@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from video_learning.adapters.ffmpeg_frames import ExtractedFrame
 from video_learning.core.errors import FileNotFoundError_
 from video_learning.core.models import MediaInfo, VideoStreamInfo
 from video_learning.services.analyze_service import AnalyzeService
@@ -23,11 +24,11 @@ class FakeProbe:
 
 
 class FakeFrameExtractor:
-    def __init__(self, frames: list[Path]) -> None:
+    def __init__(self, frames: list[ExtractedFrame]) -> None:
         self._frames = frames
         self.calls: list[tuple[MediaInfo, Path]] = []
 
-    def extract(self, media: MediaInfo, out_dir: Path) -> list[Path]:
+    def extract(self, media: MediaInfo, out_dir: Path) -> list[ExtractedFrame]:
         self.calls.append((media, out_dir))
         return self._frames
 
@@ -49,7 +50,10 @@ def _service(tmp_path: Path, ocr_text: dict[str, str], frame_names: list[str]):
         duration_seconds=10.0,
         video=VideoStreamInfo(width=1280, height=720),
     )
-    frames = [tmp_path / name for name in frame_names]
+    frames = [
+        ExtractedFrame(timestamp_seconds=float(index), image_path=tmp_path / name)
+        for index, name in enumerate(frame_names)
+    ]
     probe = FakeProbe(media)
     extractor = FakeFrameExtractor(frames)
     ocr = FakeOcr(ocr_text)
@@ -95,6 +99,44 @@ def test_aggregates_keywords_across_frames(tmp_path: Path) -> None:
     # Non-destructive guarantees are surfaced explicitly.
     assert result.to_dict()["renamed"] is False
     assert result.to_dict()["source_modified"] is False
+
+
+def test_snapshots_bind_timestamp_to_ocr_text(tmp_path: Path) -> None:
+    video = tmp_path / "clip.mov"
+    video.write_bytes(b"x")
+    service, _, _, _ = _service(
+        tmp_path,
+        {
+            "frame_000.png": "Projects Templates studio",
+            "frame_001.png": "Release Notes",
+        },
+        ["frame_000.png", "frame_001.png"],
+    )
+
+    result = service.analyze(video)
+
+    # One snapshot per frame, in order, each keeping its own timestamp + text.
+    assert [s.timestamp_seconds for s in result.snapshots] == [0.0, 1.0]
+    assert result.snapshots[0].ocr_text == "Projects Templates studio"
+    assert result.snapshots[1].ocr_text == "Release Notes"
+
+
+def test_result_dict_exposes_snapshots(tmp_path: Path) -> None:
+    video = tmp_path / "clip.mov"
+    video.write_bytes(b"x")
+    service, _, _, _ = _service(
+        tmp_path, {"frame_000.png": "Qoder Model Usage"}, ["frame_000.png"]
+    )
+
+    payload = service.analyze(video).to_dict()
+
+    assert payload["snapshots"] == [
+        {"timestamp_seconds": 0.0, "ocr_text": "Qoder Model Usage"}
+    ]
+    assert payload["frames_analyzed"] == 1
+    # Existing fields preserved.
+    for key in ("source", "keywords", "ocr_text_chars", "renamed", "applied"):
+        assert key in payload
 
 
 def test_no_text_yields_empty_keywords(tmp_path: Path) -> None:
