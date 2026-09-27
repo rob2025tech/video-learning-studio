@@ -43,7 +43,9 @@ class FakeOcr:
         return self._text.get(image.name, "")
 
 
-def _service(tmp_path: Path, ocr_text: dict[str, str], frame_names: list[str]):
+def _service(
+    tmp_path: Path, ocr_text: dict[str, str], frame_names: list[str]
+) -> tuple[AnalyzeService, FakeProbe, FakeFrameExtractor, FakeOcr]:
     media = MediaInfo(
         path=tmp_path / "clip.mov",
         filename="clip.mov",
@@ -58,7 +60,7 @@ def _service(tmp_path: Path, ocr_text: dict[str, str], frame_names: list[str]):
     extractor = FakeFrameExtractor(frames)
     ocr = FakeOcr(ocr_text)
     service = AnalyzeService(
-        inspect_service=InspectService(probe=probe),  # type: ignore[arg-type]
+        inspect_service=InspectService(probe=probe),
         frame_extractor=extractor,  # type: ignore[arg-type]
         ocr=ocr,  # type: ignore[arg-type]
     )

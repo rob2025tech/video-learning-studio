@@ -49,3 +49,23 @@ class FrameExtractionError(ContentAnalysisError):
 
 class OcrError(ContentAnalysisError):
     """tesseract failed to read text from an extracted frame."""
+
+
+class TranscriptionError(VideoLearningError):
+    """Base for local audio-transcription failures (Stage 0E)."""
+
+
+class AudioExtractionError(TranscriptionError):
+    """FFmpeg could not produce the temporary WAV needed for transcription."""
+
+
+class TranscriptionToolMissingError(TranscriptionError):
+    """whisper-cli is not installed, or is a broken shim that cannot run."""
+
+
+class TranscriptionModelMissingError(TranscriptionError):
+    """No usable whisper.cpp ggml model is configured or found."""
+
+
+class WhisperExecutionError(TranscriptionError):
+    """whisper.cpp ran but failed, timed out, or produced unparsable output."""

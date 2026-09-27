@@ -1,4 +1,4 @@
-"""Shared fixtures: canned ffprobe output for mocked unit tests."""
+"""Shared fixtures: canned ffprobe and whisper.cpp output for mocked tests."""
 
 from __future__ import annotations
 
@@ -75,6 +75,33 @@ FFPROBE_JSON_AUDIO_ONLY: dict[str, Any] = {
     },
 }
 
+# Representative whisper.cpp `--output-json` (`-oj`) structure. Segment offsets
+# are integer MILLISECONDS; text carries a leading space as whisper.cpp emits.
+# NOTE: whisper.cpp is not installed in this environment, so this schema follows
+# the documented output format and must be verified on first real use.
+WHISPER_CPP_JSON: dict[str, Any] = {
+    "systeminfo": "avx = 1 | avx2 = 0 | neon = 0",
+    "model": {"type": "base", "multilingual": False, "vocab": 51865},
+    "params": {
+        "model": "models/ggml-base.en.bin",
+        "language": "en",
+        "translate": False,
+    },
+    "result": {"language": "en"},
+    "transcription": [
+        {
+            "timestamps": {"from": "00:00:00,000", "to": "00:00:03,840"},
+            "offsets": {"from": 0, "to": 3840},
+            "text": " Today we're going to build a small command line tool.",
+        },
+        {
+            "timestamps": {"from": "00:00:03,840", "to": "00:00:07,200"},
+            "offsets": {"from": 3840, "to": 7200},
+            "text": " It reads a video and prints what it sees.",
+        },
+    ],
+}
+
 
 @pytest.fixture
 def ffprobe_json_mov() -> str:
@@ -89,3 +116,8 @@ def ffprobe_json_video_only() -> str:
 @pytest.fixture
 def ffprobe_json_audio_only() -> str:
     return json.dumps(FFPROBE_JSON_AUDIO_ONLY)
+
+
+@pytest.fixture
+def whisper_cpp_json() -> str:
+    return json.dumps(WHISPER_CPP_JSON)

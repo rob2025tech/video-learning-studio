@@ -6,6 +6,11 @@ from rich.console import Console
 from rich.table import Table
 
 from video_learning.core.models import UNKNOWN, MediaInfo
+from video_learning.core.transcript import (
+    CapabilityItem,
+    TranscriptionCapability,
+    TranscriptResult,
+)
 from video_learning.services.analyze_service import AnalyzeResult
 
 
@@ -125,4 +130,64 @@ def render_analysis(console: Console, result: AnalyzeResult) -> None:
     console.print(
         f"[dim](from on-screen text in {result.frames_analyzed} sampled frame"
         f"{'s' if result.frames_analyzed != 1 else ''}; proposal only, source unchanged)[/dim]"
+    )
+
+
+def _section(console: Console, title: str) -> None:
+    console.print(f"[bold]{title}[/bold]")
+    console.print("[dim]" + "─" * 32 + "[/dim]")
+
+
+def _capability_line(console: Console, item: CapabilityItem, *, kind: str) -> None:
+    if item.state == "available":
+        mark, word = "[green]✓[/green]", "available"
+    elif item.state == "unusable":
+        mark, word = "[red]✗[/red]", "not usable"
+    elif kind == "backend":
+        mark, word = "[red]✗[/red]", "not available"
+    else:
+        mark, word = "[red]✗[/red]", "model not found"
+    console.print(f"{mark} [bold]{item.label:<16}[/bold]{word}")
+    if item.state != "available" and item.detail:
+        console.print(f"  [dim]{item.detail}[/dim]")
+
+
+def render_transcription_capability(
+    console: Console, capability: TranscriptionCapability
+) -> None:
+    """Show this machine's local transcription capability (deterministic)."""
+    _section(console, "Transcription backends detected")
+    _capability_line(console, capability.backend, kind="backend")
+    console.print()
+    _section(console, "Model")
+    _capability_line(console, capability.model, kind="model")
+    console.print()
+    _section(console, "Recommended")
+    console.print(capability.recommended)
+    console.print(f"[dim]{capability.recommended_detail}[/dim]")
+    console.print()
+    _section(console, "Using")
+    console.print(capability.using_backend)
+    console.print(capability.using_model)
+    console.print(capability.using_language)
+
+
+def render_transcript(console: Console, result: TranscriptResult) -> None:
+    """Render a timestamped transcript timeline (evidence for the human)."""
+    console.print()
+    _section(console, "Transcription")
+    console.print(f"[bold]Backend:[/bold] {result.backend}")
+    console.print(f"[bold]Model:[/bold]   {result.model}")
+    console.print(f"[bold]Language:[/bold] {result.language}")
+    console.print()
+    if not result.segments:
+        console.print("[dim](no speech detected)[/dim]")
+    for segment in result.segments:
+        start = _fmt_timestamp(segment.start_seconds)
+        end = _fmt_timestamp(segment.end_seconds)
+        console.print(f"[cyan]{start}[/cyan] → [cyan]{end}[/cyan]  {segment.text}")
+    console.print()
+    console.print(
+        "[dim]Read-only — source unchanged; the transcript is evidence for the "
+        "human (no files renamed, nothing persisted).[/dim]"
     )
