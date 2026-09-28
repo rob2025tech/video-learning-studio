@@ -77,3 +77,12 @@ class OcrArtifactError(VideoLearningError):
 
 class ReportArtifactError(VideoLearningError):
     """A combined report artifact could not be written (Stage 0G)."""
+
+
+class SceneDetectionError(VideoLearningError):
+    """FFmpeg scene detection ran but failed, timed out, or was unparsable (Stage 0I).
+
+    A missing FFmpeg binary is reported with the existing
+    :class:`AnalysisToolMissingError` instead; this error covers a scene-detection
+    pass that could not produce trustworthy visual-change evidence.
+    """

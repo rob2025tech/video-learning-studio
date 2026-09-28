@@ -15,6 +15,7 @@ from rich.console import Console
 from video_learning import __version__
 from video_learning.adapters.ffmpeg_audio import FfmpegAudioExtractor
 from video_learning.adapters.ffmpeg_frames import FfmpegFrameExtractor
+from video_learning.adapters.ffmpeg_scene import FfmpegSceneDetector
 from video_learning.adapters.ffprobe_media import FfprobeMediaProbe
 from video_learning.adapters.tesseract_ocr import TesseractOcr
 from video_learning.adapters.whisper_cpp import WhisperCpp
@@ -31,6 +32,7 @@ from video_learning.services.analyze_service import AnalyzeService
 from video_learning.services.inspect_service import InspectService
 from video_learning.services.ocr_snapshot_store import OcrSnapshotStore
 from video_learning.services.report_service import ReportService, ReportStore
+from video_learning.services.segment_service import SegmentService
 from video_learning.services.transcribe_service import TranscribeService
 
 app = typer.Typer(
@@ -275,15 +277,17 @@ def report(
         ),
     ),
 ) -> None:
-    """Combine metadata, OCR, and transcription into one chronological report.
+    """Combine metadata, OCR, transcription, and segments into one report.
 
     Reuses the existing inspect/analyze/transcribe services (read-only) and merges
     OCR snapshots (points) with transcript segments (intervals) into a unified
-    timeline. It never modifies the source, never downloads a model, and never
-    falls back to a cloud API. If the video has no audio, or the local whisper.cpp
-    backend/model is unavailable, that is reported explicitly and the metadata and
-    OCR evidence remain useful. With ``--out`` a deterministic JSON artifact
-    (``video-learning.report/v1``) is written; ``--json`` prints that same report.
+    timeline, then adds deterministic Stage 0I segments (visual-change + speech-gap
+    evidence -> merged boundaries -> segments). It never modifies the source, never
+    downloads a model, and never falls back to a cloud API. If the video has no
+    audio, or the local whisper.cpp backend/model is unavailable, that is reported
+    explicitly and the metadata and OCR evidence remain useful. With ``--out`` a
+    deterministic JSON artifact (``video-learning.report/v1``) is written; ``--json``
+    prints that same report.
     """
     whisper = WhisperCpp()
     service = ReportService(
@@ -298,6 +302,7 @@ def report(
             audio_extractor=FfmpegAudioExtractor(),
             whisper=whisper,
         ),
+        segment_service=SegmentService(scene_detector=FfmpegSceneDetector()),
         whisper=whisper,
     )
     store = ReportStore()

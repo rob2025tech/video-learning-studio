@@ -21,6 +21,13 @@ from video_learning.core.errors import (
 )
 from video_learning.core.keywords import KeywordSuggestion, PhraseSuggestion
 from video_learning.core.models import AudioStreamInfo, MediaInfo, VideoStreamInfo
+from video_learning.core.scene import VisualChange
+from video_learning.core.segments import (
+    BoundaryCandidate,
+    Segment,
+    Segmentation,
+    SpeechBoundary,
+)
 from video_learning.core.transcript import (
     CapabilityItem,
     TranscriptionCapability,
@@ -77,6 +84,24 @@ class FakeWhisper:
     def detect_capability(self, model: Path | None) -> TranscriptionCapability:
         self.calls.append(model)
         return self._capability
+
+
+class FakeSegment:
+    def __init__(self, segmentation: Segmentation | None = None) -> None:
+        self._segmentation = segmentation or Segmentation(
+            visual_changes=(),
+            speech_boundaries=(),
+            boundaries=(),
+            segments=(),
+            video_duration_seconds=None,
+        )
+        self.calls: list[tuple[MediaInfo, TranscriptResult | None]] = []
+
+    def segment(
+        self, media: MediaInfo, transcription: TranscriptResult | None
+    ) -> Segmentation:
+        self.calls.append((media, transcription))
+        return self._segmentation
 
 
 def _capability(*, ready: bool) -> TranscriptionCapability:
@@ -160,6 +185,7 @@ def _service(
     error: TranscriptionError | None = None,
     ready: bool = True,
     analysis: AnalyzeResult | None = None,
+    segmentation: Segmentation | None = None,
 ) -> tuple[ReportService, FakeInspect, FakeAnalyze, FakeTranscribe, FakeWhisper]:
     inspect = FakeInspect(_media(tmp_path, has_audio=has_audio))
     analyze = FakeAnalyze(analysis if analysis is not None else _analysis(tmp_path))
@@ -169,6 +195,7 @@ def _service(
         inspect_service=inspect,  # type: ignore[arg-type]
         analyze_service=analyze,  # type: ignore[arg-type]
         transcribe_service=transcribe,  # type: ignore[arg-type]
+        segment_service=FakeSegment(segmentation),  # type: ignore[arg-type]
         whisper=whisper,  # type: ignore[arg-type]
     )
     return service, inspect, analyze, transcribe, whisper
@@ -210,6 +237,7 @@ def test_report_schema_and_top_level_shape(tmp_path: Path) -> None:
         "ocr",
         "transcription",
         "timeline",
+        "segments",
         "renamed",
         "applied",
         "source_modified",
@@ -217,6 +245,67 @@ def test_report_schema_and_top_level_shape(tmp_path: Path) -> None:
     assert payload["renamed"] is False
     assert payload["applied"] is False
     assert payload["source_modified"] is False
+
+
+def test_segments_section_present_with_authoritative_constants(tmp_path: Path) -> None:
+    service, *_ = _service(tmp_path, transcript=_transcript())
+
+    payload = service.build(tmp_path / "clip.mov").to_dict()
+
+    # FakeSegment returns empty evidence, so the section is present and stable and
+    # records the four authoritative Stage 0I constants verbatim.
+    assert payload["segments"] == {
+        "visual_change_threshold": 10.0,
+        "speech_gap_threshold_seconds": 2.0,
+        "merge_tolerance_seconds": 1.0,
+        "min_segment_duration_seconds": 2.0,
+        "video_duration_seconds": None,
+        "visual_changes": [],
+        "speech_boundaries": [],
+        "boundaries": [],
+        "segments": [],
+        "segment_count": 0,
+    }
+
+
+def test_segments_section_serializes_real_segmentation(tmp_path: Path) -> None:
+    # A populated segmentation (known duration) flows through the report verbatim:
+    # video_duration_seconds is a NUMBER, merged boundaries carry their reason (the
+    # authoritative boundaries[].reason location), and final segments + count are
+    # present. No sample_interval_seconds field is introduced.
+    visual = (VisualChange(10.0, 30.0),)
+    speech = (SpeechBoundary(20.0, 3.0),)
+    segmentation = Segmentation(
+        visual_changes=visual,
+        speech_boundaries=speech,
+        boundaries=(
+            BoundaryCandidate(10.0, "visual", visual, ()),
+            BoundaryCandidate(20.0, "speech_gap", (), speech),
+        ),
+        segments=(
+            Segment(0.0, 10.0, "visual"),
+            Segment(10.0, 20.0, "speech_gap"),
+            Segment(20.0, 30.0, None),
+        ),
+        video_duration_seconds=30.0,
+    )
+    service, *_ = _service(tmp_path, transcript=_transcript(), segmentation=segmentation)
+
+    payload = service.build(tmp_path / "clip.mov").to_dict()["segments"]
+
+    assert payload["video_duration_seconds"] == 30.0
+    assert isinstance(payload["video_duration_seconds"], float)
+    assert payload["visual_changes"] == [{"timestamp_seconds": 10.0, "change_score": 30.0}]
+    assert payload["speech_boundaries"] == [{"timestamp_seconds": 20.0, "gap_seconds": 3.0}]
+    # Authoritative reason serialization lives on boundaries[].reason.
+    assert [b["reason"] for b in payload["boundaries"]] == ["visual", "speech_gap"]
+    assert payload["segment_count"] == 3
+    assert payload["segments"] == [
+        {"start_seconds": 0.0, "end_seconds": 10.0, "boundary_reason": "visual"},
+        {"start_seconds": 10.0, "end_seconds": 20.0, "boundary_reason": "speech_gap"},
+        {"start_seconds": 20.0, "end_seconds": 30.0, "boundary_reason": None},
+    ]
+    assert "sample_interval_seconds" not in payload
 
 
 # -- metadata ----------------------------------------------------------------
@@ -432,6 +521,7 @@ def test_inspect_failure_propagates(tmp_path: Path) -> None:
         inspect_service=Boom(),  # type: ignore[arg-type]
         analyze_service=FakeAnalyze(_analysis(tmp_path)),  # type: ignore[arg-type]
         transcribe_service=FakeTranscribe(result=_transcript()),  # type: ignore[arg-type]
+        segment_service=FakeSegment(),  # type: ignore[arg-type]
         whisper=whisper,  # type: ignore[arg-type]
     )
 

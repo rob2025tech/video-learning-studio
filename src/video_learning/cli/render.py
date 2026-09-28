@@ -218,6 +218,40 @@ def render_ocr_artifact_saved(console: Console, path: Path, result: AnalyzeResul
     )
 
 
+def _render_segments(console: Console, result: ReportResult) -> None:
+    """Render the concise Stage 0I segment summary (evidence counts + segments).
+
+    Structured evidence (scores, gaps, merged reasons) lives in the JSON report;
+    this stays a short human-readable overview and never prints FFmpeg stderr,
+    regexes, or command lines.
+    """
+    segmentation = result.segmentation
+    _section(console, "SEGMENTS")
+    console.print(f"[bold]Visual changes:[/bold]         {len(segmentation.visual_changes)}")
+    console.print(f"[bold]Speech-gap boundaries:[/bold]  {len(segmentation.speech_boundaries)}")
+    console.print(f"[bold]Merged candidates:[/bold]      {len(segmentation.boundaries)}")
+    console.print(f"[bold]Final segments:[/bold]         {segmentation.segment_count}")
+    console.print()
+    if segmentation.video_duration_seconds is None:
+        # Explicit: ffprobe reported no authoritative duration, so no segments were
+        # assembled (duration is never estimated). Evidence above is still retained.
+        console.print(
+            "[dim]No authoritative duration from ffprobe — evidence retained, no "
+            "segments assembled (duration is never estimated).[/dim]"
+        )
+        return
+    if not segmentation.segments:
+        console.print("[dim](no segments)[/dim]")
+        return
+    for segment in segmentation.segments:
+        start = _fmt_timestamp(segment.start_seconds)
+        end = _fmt_timestamp(segment.end_seconds)
+        reason = ""
+        if segment.boundary_reason:
+            reason = f" [dim]\\[{segment.boundary_reason}][/dim]"
+        console.print(f"[cyan]{start}[/cyan] → [cyan]{end}[/cyan]{reason}")
+
+
 def render_report(
     console: Console, result: ReportResult, artifact_path: Path | None = None
 ) -> None:
@@ -295,6 +329,8 @@ def render_report(
                 f"[green]SPEECH[/green]  {event.text}"
             )
     console.print()
+
+    _render_segments(console, result)
 
     if artifact_path is not None:
         console.print(f"[dim]Artifact written: {artifact_path}[/dim]")

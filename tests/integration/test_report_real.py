@@ -17,6 +17,7 @@ import pytest
 
 from video_learning.adapters.ffmpeg_audio import FfmpegAudioExtractor
 from video_learning.adapters.ffmpeg_frames import FfmpegFrameExtractor
+from video_learning.adapters.ffmpeg_scene import FfmpegSceneDetector
 from video_learning.adapters.ffprobe_media import FfprobeMediaProbe
 from video_learning.adapters.tesseract_ocr import TesseractOcr
 from video_learning.adapters.whisper_cpp import WhisperCpp
@@ -24,6 +25,7 @@ from video_learning.core.timeline import OcrEvent
 from video_learning.services.analyze_service import AnalyzeService
 from video_learning.services.inspect_service import InspectService
 from video_learning.services.report_service import REPORT_SCHEMA, ReportService, ReportStore
+from video_learning.services.segment_service import SegmentService
 from video_learning.services.transcribe_service import TranscribeService
 
 _FONTS = [
@@ -58,6 +60,7 @@ def _service() -> ReportService:
             audio_extractor=FfmpegAudioExtractor(),
             whisper=whisper,
         ),
+        segment_service=SegmentService(scene_detector=FfmpegSceneDetector()),
         whisper=whisper,
     )
 
@@ -117,6 +120,11 @@ def test_real_report_is_deterministic_and_read_only(
     assert report.transcription_status in {"no-audio", "unavailable", "ok"}
     if report.transcription_status != "ok":
         assert report.transcription is None
+    # Stage 0I segments are present; a static clip may have no visual changes but
+    # always yields at least the full-duration segment starting at 0.0.
+    segments_payload = report.to_dict()["segments"]
+    assert segments_payload["segment_count"] >= 1
+    assert segments_payload["segments"][0]["start_seconds"] == 0.0
     # The source video is never modified.
     assert (before.st_size, before.st_mtime) == (after.st_size, after.st_mtime)
     # Two independent builds serialize byte-identically (determinism).

@@ -6,10 +6,13 @@ of OCR or transcription. It reuses the existing services and result models:
     InspectService    -> MediaInfo         (Stage 0A metadata)
     AnalyzeService    -> AnalyzeResult      (Stage 0D/0F OCR evidence)
     TranscribeService -> TranscriptResult   (Stage 0E audio evidence)
+    SegmentService    -> Segmentation       (Stage 0I segments)
 
 and merges the OCR snapshots (points) and transcript segments (intervals) into a
-single deterministic *unified timeline*. The source video is only ever read; the
-report is written to a caller-chosen artifact path and nowhere else.
+single deterministic *unified timeline*, plus a deterministic Stage 0I ``segments``
+section (visual-change + speech-gap evidence -> merged boundaries -> segments). The
+source video is only ever read; the report is written to a caller-chosen artifact
+path and nowhere else.
 
 Transcription follows Stage 0E capability/error semantics: if there is no audio,
 transcription is skipped (``no-audio``); if audio is present but the local
@@ -29,10 +32,12 @@ from typing import Any
 from video_learning.adapters.whisper_cpp import WhisperCpp
 from video_learning.core.errors import ReportArtifactError, TranscriptionError
 from video_learning.core.models import MediaInfo
+from video_learning.core.segments import Segmentation
 from video_learning.core.timeline import OcrEvent, SpeechEvent, build_timeline
 from video_learning.core.transcript import TranscriptResult
 from video_learning.services.analyze_service import AnalyzeResult, AnalyzeService
 from video_learning.services.inspect_service import InspectService
+from video_learning.services.segment_service import SegmentService
 from video_learning.services.transcribe_service import TranscribeService
 
 REPORT_SCHEMA = "video-learning.report/v1"
@@ -84,7 +89,8 @@ class ReportResult:
     ``transcription`` is ``None`` unless ``transcription_status == "ok"``. The
     status is one of ``"ok"``, ``"no-audio"``, or ``"unavailable"``;
     ``transcription_detail`` carries the Stage 0E blocking message only for
-    ``"unavailable"`` and is otherwise ``None``.
+    ``"unavailable"`` and is otherwise ``None``. ``segmentation`` is the Stage 0I
+    result (visual/speech evidence, merged boundaries, and final segments).
     """
 
     source: Path
@@ -93,6 +99,7 @@ class ReportResult:
     transcription: TranscriptResult | None
     transcription_status: str
     transcription_detail: str | None
+    segmentation: Segmentation
     timeline: list[OcrEvent | SpeechEvent] = field(default_factory=list)
 
     def _transcription_dict(self) -> dict[str, Any]:
@@ -135,6 +142,9 @@ class ReportResult:
             },
             "transcription": self._transcription_dict(),
             "timeline": [event.to_dict() for event in self.timeline],
+            # Stage 0I: deterministic segments plus the visual/speech evidence and
+            # merged boundaries they were assembled from (evidence is never lost).
+            "segments": self.segmentation.to_dict(),
             # Explicit non-destructive guarantees (project-wide convention).
             "renamed": False,
             "applied": False,
@@ -150,11 +160,13 @@ class ReportService:
         inspect_service: InspectService,
         analyze_service: AnalyzeService,
         transcribe_service: TranscribeService,
+        segment_service: SegmentService,
         whisper: WhisperCpp,
     ) -> None:
         self._inspect = inspect_service
         self._analyze = analyze_service
         self._transcribe = transcribe_service
+        self._segment = segment_service
         self._whisper = whisper
 
     def build(self, path: Path, *, model: Path | None = None) -> ReportResult:
@@ -162,6 +174,10 @@ class ReportService:
         analysis = self._analyze.analyze(path)  # reuse Stage 0D/0F
 
         transcription, status, detail = self._transcription_evidence(path, media, model)
+
+        # Stage 0I reuses the MediaInfo and transcript already gathered above; it
+        # never re-runs inspection, analysis, or transcription.
+        segmentation = self._segment.segment(media, transcription)
 
         timeline = build_timeline(
             [
@@ -184,6 +200,7 @@ class ReportService:
             transcription=transcription,
             transcription_status=status,
             transcription_detail=detail,
+            segmentation=segmentation,
             timeline=timeline,
         )
 

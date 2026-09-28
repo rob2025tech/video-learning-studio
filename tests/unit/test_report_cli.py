@@ -15,6 +15,7 @@ from typer.testing import CliRunner
 from video_learning.cli.main import app
 from video_learning.core.keywords import KeywordSuggestion, PhraseSuggestion
 from video_learning.core.models import AudioStreamInfo, MediaInfo, VideoStreamInfo
+from video_learning.core.segments import Segment, Segmentation
 from video_learning.core.timeline import OcrEvent, SpeechEvent, build_timeline
 from video_learning.core.transcript import TranscriptResult, TranscriptSegment
 from video_learning.services.analyze_service import AnalyzeResult, FrameSnapshot
@@ -53,6 +54,13 @@ def _report(video: Path) -> ReportResult:
         [OcrEvent(15.2, "video-learning-studio pyproject.toml")],
         [SpeechEvent(17.4, 23.1, "Today we build")],
     )
+    segmentation = Segmentation(
+        visual_changes=(),
+        speech_boundaries=(),
+        boundaries=(),
+        segments=(Segment(start_seconds=0.0, end_seconds=100.0, boundary_reason=None),),
+        video_duration_seconds=100.0,
+    )
     return ReportResult(
         source=video,
         media=media,
@@ -60,6 +68,7 @@ def _report(video: Path) -> ReportResult:
         transcription=transcription,
         transcription_status="ok",
         transcription_detail=None,
+        segmentation=segmentation,
         timeline=timeline,
     )
 
@@ -78,6 +87,8 @@ def test_report_renders_human_readable_summary(tmp_path: Path) -> None:
     assert "OCR" in result.output
     assert "SPEECH" in result.output
     assert "pyproject.toml" in result.output
+    assert "SEGMENTS" in result.output
+    assert "Final segments:" in result.output
 
 
 def test_report_writes_artifact_with_out(tmp_path: Path) -> None:
