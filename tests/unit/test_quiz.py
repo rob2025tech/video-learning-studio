@@ -164,6 +164,25 @@ def _mixed_quiz() -> StudyQuiz:
     return build_study_quiz(_mixed_evidence())
 
 
+def _vacuum_evidence() -> StudyEvidence:
+    """One section whose utterances offer *only* low-information candidates.
+
+    Separate from ``_mixed_evidence()`` on purpose: that fixture's counters are
+    asserted by several tests, and widening it to cover the demotion fallback would
+    change what those tests mean. The third utterance is a single token, so this
+    fixture also keeps the ``too_short`` bucket non-zero while every candidate in the
+    two answerable utterances is demoted.
+    """
+    segments = [_segment(0.0, 20.0, "visual"), _segment(20.0, 30.0, None)]
+    timeline: list[TimelineEvent] = [
+        _ocr(5.0, "Model Usage\nmodel usage"),
+        _speech(6.0, 12.0, "something here those anything"),
+        _speech(13.0, 18.0, "everything nothing here those"),
+        _speech(18.5, 19.5, "here"),
+    ]
+    return _evidence(segments, 30.0, timeline)
+
+
 def _cloze_questions(quiz: StudyQuiz) -> list[QuizQuestion]:
     return [question for question in quiz.questions if question.kind == "transcript_cloze"]
 
@@ -412,6 +431,104 @@ def test_cloze_emits_at_most_one_question_per_speech_event() -> None:
         "cloze:s0:e2",
         "cloze:s1:e0",
     ]
+
+
+def test_cloze_demotes_a_low_information_word_before_ranking_by_length() -> None:
+    """A conversational word must lose to an informative one of the same length.
+
+    Verbatim utterance from the sample tutorial's transcript. ``something`` and
+    ``structure`` tie on nine characters, so the earliest-offset tie-break used to
+    hide ``something``; demotion is what moves the blank to ``structure``. This is
+    the only answer of the sample's 32 events that the policy changes.
+    """
+    utterance = (
+        "something like this and if you open it up you will see your folder "
+        "structure this is very important"
+    )
+    quiz = _cloze_quiz(utterance)
+    questions = _cloze_questions(quiz)
+    assert len(questions) == 1
+    blank = questions[0].blank
+    assert blank is not None
+    assert blank.answer == "structure"
+    # Demotion re-ranks candidates; it never deletes an event's question.
+    assert quiz.coverage.cloze_question_count == 1
+    assert quiz.coverage.cloze_skipped_too_short_count == 0
+    assert quiz.coverage.cloze_skipped_no_eligible_token_count == 0
+    assert blank.source_utterance == utterance
+    assert utterance[blank.blank_start : blank.blank_end] == "structure"
+    assert questions[0].stem == _CLOZE_PREFIX + (
+        utterance[: blank.blank_start] + BLANK_MARKER + utterance[blank.blank_end :]
+    )
+
+
+def test_cloze_never_demotes_an_ambiguous_noun_to_conversational_filler() -> None:
+    """``folder``/``command``/``problems`` can be a tutorial's actual subject.
+
+    Demoting them would hand the blank to ``please``, which is a regression rather
+    than an improvement. Both utterances must keep the informative noun.
+    """
+    for utterance, expected in (
+        ("please review the problems now", "problems"),
+        ("we ran the command now please", "command"),
+    ):
+        blank = _cloze_questions(_cloze_quiz(utterance))[0].blank
+        assert blank is not None, utterance
+        assert blank.answer == expected, utterance
+        assert blank.answer != "please", utterance
+        assert blank.source_utterance == utterance
+
+
+def test_cloze_keeps_a_question_when_every_candidate_is_demoted() -> None:
+    """The never-eliminate fallback: a demoted-only utterance is still answerable.
+
+    Question IDs stay positional, so a skipped third event does not renumber the
+    two questions, and the skip stays in the ``too_short`` bucket it always belonged
+    to rather than being reclassified as "no eligible token".
+    """
+    quiz = build_study_quiz(_vacuum_evidence())
+    questions = _cloze_questions(quiz)
+    assert [question.question_id for question in questions] == ["cloze:s0:e0", "cloze:s0:e1"]
+    # The fallback reproduces the longest-then-earliest choice among the demoted words.
+    assert [question.blank.answer for question in questions if question.blank] == [
+        "something",
+        "everything",
+    ]
+    coverage = quiz.coverage
+    assert coverage.cloze_question_count == 2
+    assert coverage.cloze_skipped_too_short_count == 1
+    assert coverage.cloze_skipped_no_eligible_token_count == 0
+    assert coverage.cloze_suppressed_by_conflict_count == 0
+    assert coverage.attributed_speech_event_count == (
+        coverage.cloze_question_count
+        + coverage.cloze_skipped_too_short_count
+        + coverage.cloze_skipped_no_eligible_token_count
+        + coverage.cloze_suppressed_by_conflict_count
+    )
+    assert coverage.recall_question_count == 1
+    assert coverage.question_count == coverage.cloze_question_count + coverage.recall_question_count
+
+
+def test_cloze_demotion_lookup_is_lowercase_but_the_answer_stays_verbatim() -> None:
+    """Case decides nothing about the choice and everything about what is stored."""
+    blank = _cloze_questions(
+        _cloze_quiz("Something like this and you see your folder structure")
+    )[0].blank
+    assert blank is not None
+    assert blank.answer == "structure"
+    # The demoted word keeps its original spelling in the stem: nothing is rewritten.
+    assert blank.source_utterance.startswith("Something like this")
+
+    capitalized = "something like This, and here. Structure remains important"
+    question = _cloze_questions(_cloze_quiz(capitalized))[0]
+    blank = question.blank
+    assert blank is not None
+    assert blank.answer == "Structure"
+    assert blank.source_utterance == capitalized
+    assert capitalized[blank.blank_start : blank.blank_end] == "Structure"
+    assert question.stem == _CLOZE_PREFIX + (
+        capitalized[: blank.blank_start] + BLANK_MARKER + capitalized[blank.blank_end :]
+    )
 
 
 # ---------------------------------------------------------------------------

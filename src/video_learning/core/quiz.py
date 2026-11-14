@@ -45,9 +45,12 @@ For each ``SpeechEvent`` of each segment, in Task 1's order:
    transcription artifact such as a ``12:34:56`` timer overlay. The letter test is
    ``str.isalpha``, which is Unicode-wide, so accented and non-Latin words are
    ordinary candidates;
-4. the blank is the candidate with the most characters, ties broken by the earliest
-   offset. Token offsets are unique, so this is a total order and no further rule is
-   needed;
+4. the candidates are first *demoted*, then ranked. Low-information conversational
+   words (:data:`_UNNAMED_TOKENS`) are set aside so the blank falls on a word worth
+   knowing; if every candidate is one of them the demotion is dropped rather than
+   eliminating the question. Ranking is then the most characters, ties broken by the
+   earliest offset. Token offsets are unique, so this is a total order and no further
+   rule is needed;
 5. the blank spans exactly that one token — never a fragment of one, never the
    whitespace around it, never across two events.
 
@@ -128,6 +131,29 @@ _TOKEN = re.compile(r"\S+")
 # uninformative word; a second list here would drift from the one that already
 # decides what a keyword may be.
 _STOPWORD_LOOKUP = frozenset(_STOPWORDS)
+
+# Demotion is deliberately *not* the stopword gate: those decide what a keyword may
+# be, this decides which word is worth asking a learner to recall. Candidates are
+# only ever set aside, never removed, so a smaller list is the safer one. These six
+# are low-information conversational words — they carry no topic of their own, which
+# is not the same as being unable to matter to a video's subject. Ambiguous nouns
+# (`folder`, `command`, `model`, `time`, `case`, `way`, …) are excluded on purpose:
+# in a tutorial they often *are* the subject, and promoting conversational filler to
+# compensate for demoting them would be a regression, not an improvement. Widen this
+# list only when a real transcript shows the pattern it would fix.
+#
+# Looked up by the same ``str.lower()`` the stopword gate above already uses, so a
+# sentence-initial ``Something`` is demoted while the stored answer stays verbatim.
+_UNNAMED_TOKENS = frozenset(
+    {
+        "anything",
+        "everything",
+        "here",
+        "nothing",
+        "something",
+        "those",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -320,9 +346,15 @@ def _select_blank(text: str) -> tuple[re.Match[str] | None, bool]:
     ]
     if not candidates:
         return None, False
-    # Longest token, then earliest occurrence. Offsets are unique, so this decides
-    # every case without a fallback.
-    return min(candidates, key=lambda token: (-len(token.group()), token.start())), False
+    # Demote, never eliminate: the low-information words lose to any informative
+    # candidate, but when every candidate is one of them the demotion is dropped so
+    # the event still yields a question and its coverage count stays unchanged.
+    pool = [
+        token for token in candidates if token.group().lower() not in _UNNAMED_TOKENS
+    ] or candidates
+    # Longest token, then earliest occurrence. Offsets are unique, so the ranking
+    # needs no further rule.
+    return min(pool, key=lambda token: (-len(token.group()), token.start())), False
 
 
 def _cloze_question(
