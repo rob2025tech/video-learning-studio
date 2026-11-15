@@ -9,15 +9,16 @@ what is actually observable — media metadata, on-screen text, spoken words, an
 visual-change boundaries — and saves it as a plain JSON artifact. You can then
 search that artifact as often as you like without ever re-processing the video.
 
-Everything runs on your machine. The only Python dependencies are `typer` and
-`rich`; all media work is delegated to external binaries (`ffprobe`, `ffmpeg`,
+The application runs locally. `uv sync` may access PyPI to install the two
+Python dependencies. The only Python dependencies are `typer` and `rich`; all
+media work is delegated to external binaries (`ffprobe`, `ffmpeg`,
 `tesseract`, `whisper-cli`) through `subprocess`. No module in `src/` makes a
 network call, no model is ever downloaded, and there is no cloud fallback. The
 source video is only ever read — never renamed, moved, or modified.
 
 ## Architecture
 
-Four layers, with dependencies pointing inward:
+Five packages, with dependencies pointing inward:
 
 ```
 cli/        parse arguments -> call a service -> render output
@@ -30,9 +31,12 @@ providers/  the MediaProbe Protocol — the single provider seam so far
 Adapters are constructed at the CLI root and injected into services, so the pure
 core never reaches for a binary. `core/search.py` implements Okapi BM25 over
 already-extracted evidence; `services/search_service.py` builds one index per
-artifact and delegates each query to it. Because the search service imports no
-adapter, there is no call path from a query to a subprocess — the absence of
-media processing is structural, not a promise.
+artifact and delegates each query to it. `services/search_service.py` imports
+only `core/`, and the `search` command's whole path —
+`ReportStore.load_evidence`, then `SearchService.query` — performs one
+`read_text` and no subprocess call. The absence of media processing is
+structural, not a promise: `subprocess` is imported in `adapters/` and nowhere
+else in `src/`.
 
 `core/study_guide.py` and `core/quiz.py` (with their services) exist as library
 code and are covered by unit tests, but **no CLI command exposes them yet**.
@@ -295,9 +299,10 @@ The gap between `query_token_count` and `meaningful_query_term_count` shows when
 query was entirely stopwords or UI chrome. The gap between `matched_record_count`
 and `returned_record_count` shows when an answer was capped.
 
-Top-level fields also carry `status`, `query`, `source`, `limit`, `result_count`,
-`video_duration_seconds`, `transcription_status`, `transcription_available`, and
-`study_evidence_schema`.
+The top-level fields of a `search --json` response are `schema` (the value
+`video-learning.search/v1`), `status`, `query`, `source`, `limit`,
+`result_count`, `results`, `coverage`, `video_duration_seconds`,
+`transcription_status`, `transcription_available`, and `study_evidence_schema`.
 
 ### Statuses
 
@@ -445,6 +450,11 @@ uv run mypy
 
 `mypy` runs in strict mode over `src/`. Ruff is configured for a 100-character
 line length.
+
+Run `uv run pytest` to execute the test suite. Unit tests do not require media
+tooling. Integration tests may require external binaries and
+`VLS_WHISPER_MODEL`; tests with unmet prerequisites may be skipped. Review the
+test summary, including skipped tests, when evaluating a run.
 
 ### How the tests are layered
 
