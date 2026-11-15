@@ -36,7 +36,7 @@ _NO_SUBPROCESS = patch.object(
 )
 
 
-def _report(video: Path) -> ReportResult:
+def _report(video: Path, ocr_text: str = "build a search index locally") -> ReportResult:
     """A report whose evidence shares one distinctive term, so ranking and limits show."""
     speech = tuple(
         TranscriptSegment(index * 4.0, index * 4.0 + 3.0, f"the index ranks record {index}")
@@ -46,9 +46,9 @@ def _report(video: Path) -> ReportResult:
         source=video,
         keywords=[KeywordSuggestion("index", 7)],
         phrases=[PhraseSuggestion("search index", 2)],
-        snapshots=[FrameSnapshot(0.5, "build a search index locally")],
+        snapshots=[FrameSnapshot(0.5, ocr_text)],
         frames_analyzed=1,
-        ocr_text_chars=29,
+        ocr_text_chars=len(ocr_text),
     )
     transcription = TranscriptResult(
         source=str(video),
@@ -58,7 +58,7 @@ def _report(video: Path) -> ReportResult:
         segments=speech,
     )
     timeline = build_timeline(
-        [OcrEvent(0.5, "build a search index locally")],
+        [OcrEvent(0.5, ocr_text)],
         [SpeechEvent(s.start_seconds, s.end_seconds, s.text) for s in speech],
     )
     segmentation = Segmentation(
@@ -116,6 +116,31 @@ def test_search_lists_matches_with_timestamps(tmp_path: Path) -> None:
     assert "segment 0" in result.output
     assert "matched index" in result.output
     assert "the video was not opened" in result.output
+
+
+def test_search_ocr_line_shows_the_match_not_the_record_opening(tmp_path: Path) -> None:
+    """A long OCR record must surface its matched phrase, not its opening words.
+
+    The shared fixture's OCR record is too short to ever be truncated, so it cannot
+    exercise this; here the only match sits past offset 280.
+    """
+    ocr_text = (
+        "Preferences\n\n"
+        + "General   Appearance   Advanced\n" * 8
+        + "\nAdjust the histogram until the exposure looks right.\n"
+    )
+    report = _report(tmp_path / "clip.mov", ocr_text)
+    out = tmp_path / "report.json"
+    ReportStore().save(report, out)
+
+    with _NO_SUBPROCESS:
+        result = runner.invoke(app, ["search", str(out), "histogram"])
+
+    assert result.exit_code == 0, result.output
+    # Whole words, because rich wraps the evidence line at the terminal width.
+    assert "Adjust" in result.output
+    assert "exposure" in result.output
+    assert "Preferences" not in result.output
 
 
 def test_search_json_is_exactly_the_result_model(tmp_path: Path) -> None:

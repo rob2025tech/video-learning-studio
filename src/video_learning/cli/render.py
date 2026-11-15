@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from video_learning.core.models import UNKNOWN, MediaInfo
-from video_learning.core.search import SearchResults
+from video_learning.core.search import SearchResults, Token
 from video_learning.core.timeline import OcrEvent
 from video_learning.core.transcript import (
     CapabilityItem,
@@ -60,6 +60,90 @@ def _ocr_preview(text: str, limit: int = 90) -> str:
     if len(collapsed) <= limit:
         return collapsed
     return f"{collapsed[: limit - 1].rstrip()}…"
+
+
+def _collapse_context(chunk: str) -> str:
+    """Fold one run of surrounding text to single spaces, keeping a separator.
+
+    Only the text *between* matched surfaces reaches here. The boundary spaces are
+    restored because collapsing a chunk strips its edges, and without them the last
+    context word would fuse onto the first character of the match.
+    """
+    collapsed = " ".join(chunk.split())
+    if not collapsed:
+        return " " if chunk else ""
+    lead = " " if chunk[0].isspace() else ""
+    trail = " " if chunk[-1].isspace() else ""
+    return f"{lead}{collapsed}{trail}"
+
+
+def _matched_excerpt(text: str, spans: tuple[Token, ...], limit: int = 90) -> str:
+    """Window an OCR record around its first match rather than its opening words.
+
+    Every offset is computed on the untouched ``text``. A matched surface is emitted
+    as the raw slice and only the context around it is whitespace-folded, so the
+    evidence a reader sees is the evidence the artifact stores.
+
+    Spans nest — a compound and its parts can both match — so they are fused into
+    outermost intervals first, and the window edges then snap outward to those
+    intervals. A match is never cut to fit the width: a surface longer than ``limit``,
+    or an edge snap, wins over the budget.
+
+    Any span breaking the core's ``text[start:end] == surface`` contract falls back to
+    the plain preview, so an inconsistent offset can never reach a slice.
+    """
+    if not spans:
+        return _ocr_preview(text, limit)
+    for span in spans:
+        inside = 0 <= span.start < span.end <= len(text)
+        if not inside or text[span.start : span.end] != span.surface:
+            return _ocr_preview(text, limit)
+
+    intervals: list[tuple[int, int]] = []
+    for span in sorted(spans, key=lambda token: (token.start, token.end)):
+        if intervals and span.start <= intervals[-1][1]:
+            intervals[-1] = (intervals[-1][0], max(intervals[-1][1], span.end))
+        else:
+            intervals.append((span.start, span.end))
+
+    anchor_start, anchor_end = intervals[0]
+    budget = max(limit, anchor_end - anchor_start)
+    context = budget - (anchor_end - anchor_start)
+    lo = anchor_start - context // 2
+    hi = anchor_end + (context - context // 2)
+    if lo < 0:
+        hi -= lo
+        lo = 0
+    if hi > len(text):
+        lo -= hi - len(text)
+        hi = len(text)
+    lo = max(lo, 0)
+    # Intervals are disjoint, so snapping lands on a boundary and cannot pull a new
+    # straddler in: one pass, no cascade.
+    for start, end in intervals:
+        if start < lo < end:
+            lo = start
+        if start < hi < end:
+            hi = end
+
+    pieces: list[str] = []
+    cursor = lo
+    for start, end in intervals:
+        if end <= lo or start >= hi:
+            continue
+        pieces.append(_collapse_context(text[cursor:start]))
+        pieces.append(text[start:end])
+        cursor = end
+    pieces.append(_collapse_context(text[cursor:hi]))
+    # The loop appends context before every surface and the trailing context after the
+    # last one, so index 0 and index -1 are always context — never a matched surface.
+    pieces[0] = pieces[0].lstrip()
+    pieces[-1] = pieces[-1].rstrip()
+    body = "".join(pieces)
+
+    lead = "…" if text[:lo].strip() else ""
+    trail = "…" if text[hi:].strip() else ""
+    return f"{lead}{body}{trail}"
 
 
 def render_media_info(console: Console, info: MediaInfo) -> None:
@@ -419,8 +503,9 @@ def render_search_results(console: Console, results: SearchResults) -> None:
             details = f"{details} · matched {', '.join(match.matched_terms)}"
         if evidence.source_type == "ocr":
             stamp = _fmt_timestamp(evidence.start_seconds)
+            excerpt = _matched_excerpt(evidence.text, match.matched_spans)
             console.print(
-                f"[cyan]{stamp}[/cyan]  [magenta]OCR[/magenta]     {_ocr_preview(evidence.text)}"
+                f"[cyan]{stamp}[/cyan]  [magenta]OCR[/magenta]     {excerpt}"
             )
         else:
             start = _fmt_timestamp(evidence.start_seconds)
