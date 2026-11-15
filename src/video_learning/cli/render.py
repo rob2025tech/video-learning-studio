@@ -473,11 +473,15 @@ def _explain_empty_answer(console: Console, results: SearchResults) -> None:
 def render_search_results(console: Console, results: SearchResults) -> None:
     """Render one query's ranked evidence with the timestamps to jump to.
 
-    Each match is one line of verbatim evidence text plus a detail line naming its
-    score, its segment attribution, and the terms that earned it. OCR records are
-    points (the artifact stores a single timestamp for them), so only speech records
-    print a range. A capped answer always says how many matches were withheld, and the
-    counts come from the core rather than from this renderer's own arithmetic.
+    Each match is one line of evidence plus a detail line naming its score, its
+    segment attribution, and the terms that earned it. An OCR line is an excerpt
+    windowed around the first match: the matched surface stays exact, the context
+    around it is folded to single spaces, and ``…`` marks text left out. A speech
+    line is a plain preview of the segment from its opening. ``--json`` carries the
+    complete text and the exact spans either way. OCR records are points (the
+    artifact stores one timestamp for them), so only speech records print a range.
+    A capped answer always says how many matches were withheld, and the counts come
+    from the core rather than from this renderer's own arithmetic.
     """
     coverage = results.coverage
     _section(console, "SEARCH")

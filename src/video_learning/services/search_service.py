@@ -49,9 +49,12 @@ rehydration of a serialized artifact. Step 3 wired both up around this service â
 :class:`StudyEvidence` this constructor takes, and the ``search`` command in
 ``cli/main.py`` calls this service with it â€” so nothing about this seam changed shape.
 Still out of scope for the feature: persisting a result set, SQLite/FTS5, embeddings,
-semantic search, reciprocal-rank fusion, multi-query orchestration, excerpting or
-highlight rendering, and any change to the core tokenizer, ranking or status rules. The
-evidence object is only ever read; nothing is written.
+semantic search, reciprocal-rank fusion, multi-query orchestration, and any change to
+the core tokenizer, ranking or status rules. Excerpting is not among them because it
+belongs one layer up: :func:`~video_learning.cli.render.render_search_results` windows
+an OCR record around its first match for the readable listing, while :meth:`query`
+still hands back the core's results with the complete text and exact spans untouched.
+The evidence object is only ever read; nothing is written.
 """
 
 from __future__ import annotations
