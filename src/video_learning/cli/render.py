@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from video_learning.core.models import UNKNOWN, MediaInfo
+from video_learning.core.search import SearchResults
 from video_learning.core.timeline import OcrEvent
 from video_learning.core.transcript import (
     CapabilityItem,
@@ -339,3 +340,112 @@ def render_report(
         "combined into one chronological timeline (no renaming, no semantic "
         "alignment).[/dim]"
     )
+
+
+_SEARCH_ARTIFACT_NOTE = (
+    "[dim]Read from the saved report artifact — the video was not opened and no "
+    "frame extraction, OCR, transcription or segmentation was re-run.[/dim]"
+)
+
+
+def _explain_empty_answer(console: Console, results: SearchResults) -> None:
+    """Say why an empty answer is empty, using only the core's coverage counts.
+
+    The four shapes are genuinely different user problems (nothing indexed, a limit that
+    asked for nothing, a query with no search intent behind it, real terms that occur
+    nowhere), so the counts that distinguish them are named instead of a generic "no
+    results" message. Nothing here reinterprets the status.
+    """
+    coverage = results.coverage
+    if results.status == "no_evidence":
+        console.print(
+            f"[dim]Nothing in this artifact is searchable: {coverage.record_count} record"
+            f"{'s' if coverage.record_count != 1 else ''} projected, "
+            f"{coverage.searchable_record_count} of them carrying a meaningful term.[/dim]"
+        )
+    elif coverage.matched_record_count:
+        # Only a non-positive limit can empty the answer while matches exist: the limit
+        # caps what is returned, never what is considered.
+        console.print(
+            f"[dim]{coverage.matched_record_count} record"
+            f"{'s' if coverage.matched_record_count != 1 else ''} matched, but --limit "
+            f"{results.limit} asked for none.[/dim]"
+        )
+    elif coverage.meaningful_query_term_count == 0:
+        console.print(
+            f"[dim]The query split into {coverage.query_token_count} fragment"
+            f"{'s' if coverage.query_token_count != 1 else ''}, none of them a meaningful "
+            "term (stopwords or UI chrome), so nothing was scored.[/dim]"
+        )
+    else:
+        console.print(
+            f"[dim]None of the {coverage.meaningful_query_term_count} meaningful query term"
+            f"{'s' if coverage.meaningful_query_term_count != 1 else ''} appears in the "
+            f"{coverage.searchable_record_count} searchable record"
+            f"{'s' if coverage.searchable_record_count != 1 else ''}.[/dim]"
+        )
+
+
+def render_search_results(console: Console, results: SearchResults) -> None:
+    """Render one query's ranked evidence with the timestamps to jump to.
+
+    Each match is one line of verbatim evidence text plus a detail line naming its
+    score, its segment attribution, and the terms that earned it. OCR records are
+    points (the artifact stores a single timestamp for them), so only speech records
+    print a range. A capped answer always says how many matches were withheld, and the
+    counts come from the core rather than from this renderer's own arithmetic.
+    """
+    coverage = results.coverage
+    _section(console, "SEARCH")
+    console.print(f"[bold]Query:[/bold]  {results.query}")
+    console.print(f"[bold]Source:[/bold] {results.source.name}")
+    console.print(f"[bold]Status:[/bold] {results.status}")
+    console.print()
+
+    if not results.results:
+        console.print("[dim](no matches)[/dim]")
+        _explain_empty_answer(console, results)
+        console.print()
+        console.print(_SEARCH_ARTIFACT_NOTE)
+        return
+
+    for match in results.results:
+        evidence = match.evidence
+        attribution = (
+            "unattributed" if evidence.segment_id is None else f"segment {evidence.segment_id}"
+        )
+        details = f"score {match.score:.3f} · {attribution}"
+        if match.matched_terms:
+            details = f"{details} · matched {', '.join(match.matched_terms)}"
+        if evidence.source_type == "ocr":
+            stamp = _fmt_timestamp(evidence.start_seconds)
+            console.print(
+                f"[cyan]{stamp}[/cyan]  [magenta]OCR[/magenta]     {_ocr_preview(evidence.text)}"
+            )
+        else:
+            start = _fmt_timestamp(evidence.start_seconds)
+            end = (
+                _fmt_timestamp(evidence.end_seconds)
+                if evidence.end_seconds is not None
+                else UNKNOWN
+            )
+            console.print(
+                f"[cyan]{start}[/cyan] → [cyan]{end}[/cyan]  "
+                f"[green]SPEECH[/green]  {_ocr_preview(evidence.text)}"
+            )
+        console.print(f"  [dim]{details}[/dim]")
+
+    console.print()
+    if coverage.returned_record_count < coverage.matched_record_count:
+        console.print(
+            f"[dim]Showing {coverage.returned_record_count} of "
+            f"{coverage.matched_record_count} matching records (limit {results.limit}); "
+            "the limit caps what is returned, never what is considered.[/dim]"
+        )
+    else:
+        console.print(
+            f"[dim]{coverage.matched_record_count} matching record"
+            f"{'s' if coverage.matched_record_count != 1 else ''} of "
+            f"{coverage.searchable_record_count} searchable.[/dim]"
+        )
+    console.print(_SEARCH_ARTIFACT_NOTE)

@@ -76,7 +76,7 @@ class OcrArtifactError(VideoLearningError):
 
 
 class ReportArtifactError(VideoLearningError):
-    """A combined report artifact could not be written (Stage 0G)."""
+    """A combined report artifact could not be written, read, or parsed (Stage 0G)."""
 
 
 class SceneDetectionError(VideoLearningError):

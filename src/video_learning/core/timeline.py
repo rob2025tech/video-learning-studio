@@ -21,6 +21,17 @@ from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 
+def _require_seconds(value: Any, key: str) -> None:
+    """Reject a non-numeric timestamp rather than let it reach a time comparison.
+
+    Nothing downstream compares these numbers when the segmentation has no segments,
+    so a string would otherwise survive rehydration and fail in the renderer. ``bool``
+    is excluded explicitly because it is an ``int`` subclass.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a number of seconds, got {value!r}")
+
+
 @dataclass(frozen=True)
 class OcrEvent:
     """A point-in-time on-screen-text observation carrying the complete OCR text."""
@@ -39,6 +50,13 @@ class OcrEvent:
     def sort_key(self) -> tuple[float, int, float]:
         """Chronological key ``(time, type rank, tie-break)``; OCR is a point (0)."""
         return (self.timestamp_seconds, 0, self.timestamp_seconds)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> OcrEvent:
+        """Inverse of :meth:`to_dict` (used to reload a persisted timeline)."""
+        timestamp = data["timestamp_seconds"]
+        _require_seconds(timestamp, "timestamp_seconds")
+        return cls(timestamp_seconds=timestamp, text=data["text"])
 
 
 @dataclass(frozen=True)
@@ -62,8 +80,32 @@ class SpeechEvent:
         """Chronological key ``(time, type rank, tie-break)``; speech is an interval (1)."""
         return (self.start_seconds, 1, self.end_seconds)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SpeechEvent:
+        """Inverse of :meth:`to_dict` (used to reload a persisted timeline)."""
+        start = data["start_seconds"]
+        end = data["end_seconds"]
+        _require_seconds(start, "start_seconds")
+        _require_seconds(end, "end_seconds")
+        return cls(start_seconds=start, end_seconds=end, text=data["text"])
+
 
 TimelineEvent: TypeAlias = OcrEvent | SpeechEvent
+
+
+def timeline_event_from_dict(data: dict[str, Any]) -> TimelineEvent:
+    """Rebuild one serialized timeline event from its ``type`` discriminator.
+
+    The timeline mixes two event kinds in one array, so the caller cannot know which
+    :meth:`from_dict` to use. An unrecognised ``type`` is rejected rather than guessed
+    at: the artifact came from a model this version does not know.
+    """
+    kind = data["type"]
+    if kind == "ocr":
+        return OcrEvent.from_dict(data)
+    if kind == "speech":
+        return SpeechEvent.from_dict(data)
+    raise ValueError(f"unknown timeline event type {kind!r}")
 
 
 def build_timeline(

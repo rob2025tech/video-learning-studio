@@ -24,14 +24,17 @@ from video_learning.cli.render import (
     render_media_info,
     render_ocr_artifact_saved,
     render_report,
+    render_search_results,
     render_transcript,
     render_transcription_capability,
 )
 from video_learning.core.errors import VideoLearningError
+from video_learning.core.search import DEFAULT_RESULT_LIMIT
 from video_learning.services.analyze_service import AnalyzeService
 from video_learning.services.inspect_service import InspectService
 from video_learning.services.ocr_snapshot_store import OcrSnapshotStore
 from video_learning.services.report_service import ReportService, ReportStore
+from video_learning.services.search_service import SearchService
 from video_learning.services.segment_service import SegmentService
 from video_learning.services.transcribe_service import TranscribeService
 
@@ -319,3 +322,45 @@ def report(
         print(json.dumps(result.to_dict(), indent=2))
     else:
         render_report(console, result, artifact_path)
+
+
+@app.command()
+def search(
+    artifact: Path = typer.Argument(
+        ...,
+        exists=False,  # validated by the store so errors stay user-facing
+        help="Path to a report JSON artifact written by `report --out`.",
+    ),
+    query: str = typer.Argument(
+        ..., help="Words to look for in the video's on-screen text and speech."
+    ),
+    limit: int = typer.Option(
+        DEFAULT_RESULT_LIMIT,
+        "--limit",
+        help="Maximum number of matches to return (0 reports the counts only).",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit the machine-readable result set instead of the readable list."
+    ),
+) -> None:
+    """Search a video's saved evidence for a query and get timestamped matches.
+
+    Reads the ``video-learning.report/v1`` artifact that ``report --out`` wrote,
+    rebuilds the per-segment evidence from the timeline and segments already stored
+    in it, and ranks every matching OCR point and speech interval with local BM25.
+    It never opens the video: no ffmpeg, no tesseract, no whisper.cpp, and nothing
+    over the network. Evidence recorded in the artifact is the whole corpus, so a
+    query costs one lexical pass over text that was already produced.
+    """
+    try:
+        evidence = ReportStore().load_evidence(artifact)
+    except VideoLearningError as exc:
+        error_console.print(f"Error: {exc}")
+        raise typer.Exit(code=1) from exc
+
+    results = SearchService(evidence).query(query, limit=limit)
+    if json_output:
+        # Plain print keeps stdout strictly valid JSON (rich may wrap/colorize).
+        print(json.dumps(results.to_dict(), indent=2))
+    else:
+        render_search_results(console, results)

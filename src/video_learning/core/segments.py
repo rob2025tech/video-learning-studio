@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, TypeAlias, get_args
 
 from video_learning.core.scene import VISUAL_CHANGE_THRESHOLD, VisualChange
 from video_learning.core.transcript import TranscriptSegment
@@ -40,6 +40,20 @@ MERGE_TOLERANCE_SECONDS = 1.0
 MIN_SEGMENT_DURATION_SECONDS = 2.0
 
 BoundaryReason: TypeAlias = Literal["visual", "speech_gap", "combined"]
+
+# The only three reasons :func:`_reason` can return, read back off the Literal so
+# the set cannot drift from the type it validates.
+_BOUNDARY_REASONS: tuple[str, ...] = get_args(BoundaryReason)
+
+# ``Segmentation.to_dict`` writes these four constants so a reader can interpret the
+# numbers without the source. They are output-only: a reader must agree with the code
+# that produced them, or the artifact describes a different assembly rule.
+_ARTIFACT_CONSTANTS: tuple[tuple[str, float], ...] = (
+    ("visual_change_threshold", VISUAL_CHANGE_THRESHOLD),
+    ("speech_gap_threshold_seconds", SPEECH_GAP_THRESHOLD_SECONDS),
+    ("merge_tolerance_seconds", MERGE_TOLERANCE_SECONDS),
+    ("min_segment_duration_seconds", MIN_SEGMENT_DURATION_SECONDS),
+)
 
 
 @dataclass(frozen=True)
@@ -59,6 +73,11 @@ class SpeechBoundary:
             "timestamp_seconds": self.timestamp_seconds,
             "gap_seconds": self.gap_seconds,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SpeechBoundary:
+        """Inverse of :meth:`to_dict` (used to reload a persisted segmentation)."""
+        return cls(timestamp_seconds=data["timestamp_seconds"], gap_seconds=data["gap_seconds"])
 
 
 @dataclass(frozen=True)
@@ -84,6 +103,28 @@ class BoundaryCandidate:
             "speech_boundaries": [boundary.to_dict() for boundary in self.speech_boundaries],
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> BoundaryCandidate:
+        """Inverse of :meth:`to_dict` (used to reload a persisted segmentation).
+
+        ``reason`` is validated rather than coerced: an unrecognised value means the
+        artifact came from a different assembly rule, and inventing a replacement
+        would silently mislabel real evidence.
+        """
+        reason = data["reason"]
+        if reason not in _BOUNDARY_REASONS:
+            raise ValueError(f"unknown boundary reason {reason!r}")
+        return cls(
+            timestamp_seconds=data["timestamp_seconds"],
+            reason=reason,
+            visual_changes=tuple(
+                VisualChange.from_dict(change) for change in data["visual_changes"]
+            ),
+            speech_boundaries=tuple(
+                SpeechBoundary.from_dict(boundary) for boundary in data["speech_boundaries"]
+            ),
+        )
+
 
 @dataclass(frozen=True)
 class Segment:
@@ -104,6 +145,22 @@ class Segment:
             "end_seconds": self.end_seconds,
             "boundary_reason": self.boundary_reason,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Segment:
+        """Inverse of :meth:`to_dict` (used to reload a persisted segmentation).
+
+        ``boundary_reason`` is optional (the final segment has none), so only a
+        present value is validated.
+        """
+        reason = data["boundary_reason"]
+        if reason is not None and reason not in _BOUNDARY_REASONS:
+            raise ValueError(f"unknown boundary reason {reason!r}")
+        return cls(
+            start_seconds=data["start_seconds"],
+            end_seconds=data["end_seconds"],
+            boundary_reason=reason,
+        )
 
 
 @dataclass(frozen=True)
@@ -141,6 +198,50 @@ class Segmentation:
             "segments": [segment.to_dict() for segment in self.segments],
             "segment_count": self.segment_count,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Segmentation:
+        """Inverse of :meth:`to_dict` (used to reload a persisted segmentation).
+
+        The four threshold constants are *checked*, never adopted: they are output-only,
+        so an artifact that disagrees with this code describes a different assembly rule
+        and cannot be reinterpreted here. ``segment_count`` is likewise validated against
+        the segments actually present, and a present ``video_duration_seconds`` must be a
+        number — with no segments, nothing else here would compare it.
+        """
+        for key, expected in _ARTIFACT_CONSTANTS:
+            if data[key] != expected:
+                raise ValueError(
+                    f"report was assembled with a different {key}: "
+                    f"{data[key]!r}, expected {expected!r}"
+                )
+        duration = data["video_duration_seconds"]
+        # ``bool`` is an ``int`` subclass, so it is excluded explicitly.
+        if duration is not None and (
+            isinstance(duration, bool) or not isinstance(duration, (int, float))
+        ):
+            raise ValueError(
+                f"video_duration_seconds must be a number of seconds, got {duration!r}"
+            )
+        segments = tuple(Segment.from_dict(segment) for segment in data["segments"])
+        segment_count = data["segment_count"]
+        if segment_count != len(segments):
+            raise ValueError(
+                f"segment_count {segment_count!r} disagrees with {len(segments)} segments"
+            )
+        return cls(
+            visual_changes=tuple(
+                VisualChange.from_dict(change) for change in data["visual_changes"]
+            ),
+            speech_boundaries=tuple(
+                SpeechBoundary.from_dict(boundary) for boundary in data["speech_boundaries"]
+            ),
+            boundaries=tuple(
+                BoundaryCandidate.from_dict(candidate) for candidate in data["boundaries"]
+            ),
+            segments=segments,
+            video_duration_seconds=duration,
+        )
 
 
 def detect_speech_boundaries(

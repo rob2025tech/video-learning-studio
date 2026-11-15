@@ -33,7 +33,13 @@ from video_learning.adapters.whisper_cpp import WhisperCpp
 from video_learning.core.errors import ReportArtifactError, TranscriptionError
 from video_learning.core.models import MediaInfo
 from video_learning.core.segments import Segmentation
-from video_learning.core.timeline import OcrEvent, SpeechEvent, build_timeline
+from video_learning.core.study import StudyEvidence, build_study_evidence
+from video_learning.core.timeline import (
+    OcrEvent,
+    SpeechEvent,
+    build_timeline,
+    timeline_event_from_dict,
+)
 from video_learning.core.transcript import TranscriptResult
 from video_learning.services.analyze_service import AnalyzeResult, AnalyzeService
 from video_learning.services.inspect_service import InspectService
@@ -227,7 +233,11 @@ class ReportService:
 
 
 class ReportStore:
-    """Persist a :class:`ReportResult` as a deterministic local JSON artifact."""
+    """Persist a :class:`ReportResult` as a deterministic local JSON artifact.
+
+    Reading is deliberately partial: :meth:`load_evidence` rebuilds only what the
+    downstream evidence derivations consume, rather than the whole report.
+    """
 
     schema = REPORT_SCHEMA
 
@@ -246,3 +256,55 @@ class ReportStore:
                 f"Could not write report artifact to '{path}': {exc}"
             ) from exc
         return path
+
+    def load_evidence(self, path: Path) -> StudyEvidence:
+        """Reload the study evidence a saved report artifact describes.
+
+        Only the sections :func:`~video_learning.core.study.build_study_evidence`
+        consumes are rebuilt — the segmentation, the timeline, and the transcription
+        status/detail — because that is all a downstream pure derivation needs. This is
+        deliberately *not* full :class:`ReportResult` rehydration: ``metadata`` is
+        written by :func:`_metadata_dict` in a flatter shape than ``MediaInfo`` (and
+        drops volatile filesystem values on purpose), ``ocr`` is evidence no learning
+        artifact reads back here, ``TranscriptResult`` has no ``from_dict``, and
+        rebuilding a transcript object would break the report's own invariant that a
+        non-``"ok"`` status pairs with ``None``.
+
+        The artifact is read only; the video it describes is never opened, and no
+        analysis, transcription, or segmentation work is re-run.
+        """
+        try:
+            raw = path.read_text(encoding="utf-8")
+        # A decode failure is a ValueError, not an OSError, so it must be named here.
+        except (OSError, UnicodeDecodeError) as exc:
+            raise ReportArtifactError(f"Could not read report artifact '{path}': {exc}") from exc
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ReportArtifactError(
+                f"Report artifact '{path}' is not valid JSON: {exc}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise ReportArtifactError(f"Report artifact '{path}' is not a JSON object.")
+        found = data.get("schema")
+        if found != self.schema:
+            raise ReportArtifactError(
+                f"Unsupported report artifact schema in '{path}': {found!r} "
+                f"(expected {self.schema!r})."
+            )
+        try:
+            return build_study_evidence(
+                segmentation=Segmentation.from_dict(data["segments"]),
+                timeline=[timeline_event_from_dict(event) for event in data["timeline"]],
+                transcription_status=data["transcription"]["status"],
+                transcription_detail=data["transcription"]["detail"],
+                source=Path(data["source"]),
+            )
+        except KeyError as exc:
+            raise ReportArtifactError(
+                f"Report artifact '{path}' is missing the {exc.args[0]!r} section it needs."
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise ReportArtifactError(
+                f"Report artifact '{path}' holds a value this version cannot interpret: {exc}"
+            ) from exc

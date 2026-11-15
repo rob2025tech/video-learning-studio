@@ -36,3 +36,8 @@ class VisualChange:
             "timestamp_seconds": self.timestamp_seconds,
             "change_score": self.change_score,
         }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> VisualChange:
+        """Inverse of :meth:`to_dict` (used to reload a persisted segmentation)."""
+        return cls(timestamp_seconds=data["timestamp_seconds"], change_score=data["change_score"])
