@@ -28,6 +28,46 @@ adapters/   every subprocess boundary (ffprobe, ffmpeg, tesseract, whisper.cpp)
 providers/  the MediaProbe Protocol — the single provider seam so far
 ```
 
+Arrow heads point at the thing depended upon:
+
+```mermaid
+flowchart TD
+    CLI["cli/<br/>arguments · adapter construction · rendering"]
+
+    subgraph SERVICES["services/"]
+        INSPECT["inspect"]
+        PIPE["analyze · transcribe<br/>segment · report"]
+        SRCH["search"]
+        PERSIST["ReportStore<br/>OcrSnapshotStore"]
+    end
+
+    subgraph CORE["core/ — pure, deterministic, no I/O"]
+        MODEL["models · scene · timeline · segments<br/>transcript · study · keywords<br/>errors"]
+        RANK["search — Okapi BM25"]
+    end
+
+    PROV["providers/<br/>MediaProbe Protocol"]
+    ADAPT["adapters/<br/>ffprobe_media · ffmpeg_frames<br/>ffmpeg_audio · ffmpeg_scene<br/>tesseract_ocr · whisper_cpp"]
+    BIN["external binaries<br/>ffprobe · ffmpeg<br/>tesseract · whisper-cli"]
+    ART["local JSON artifacts"]
+
+    CLI --> SERVICES
+    CLI -->|"constructs and injects"| ADAPT
+    INSPECT --> PROV
+    PIPE -->|"typed collaborators"| ADAPT
+    PIPE --> MODEL
+    SRCH --> RANK
+    SRCH --> MODEL
+    PERSIST --> ART
+    PERSIST --> MODEL
+    PROV --> MODEL
+    ADAPT --> MODEL
+    ADAPT -->|"the only subprocess calls"| BIN
+```
+
+There is no arrow from `search` to `adapters/`: the search service is the one use
+case that reaches only `core/`.
+
 Adapters are constructed at the CLI root and injected into services, so the pure
 core never reaches for a binary. `core/search.py` implements Okapi BM25 over
 already-extracted evidence; `services/search_service.py` builds one index per
@@ -37,6 +77,42 @@ only `core/`, and the `search` command's whole path —
 `read_text` and no subprocess call. The absence of media processing is
 structural, not a promise: `subprocess` is imported in `adapters/` and nowhere
 else in `src/`.
+
+The same split, as the two paths a user takes:
+
+```mermaid
+flowchart LR
+    VIDEO["video file<br/>read only, never<br/>renamed or modified"]
+
+    subgraph PROCESS["report — one expensive pass"]
+        OCR["on-screen text<br/>tesseract, sampled frames"]
+        SPEECH["spoken words<br/>whisper.cpp + ggml model"]
+        SEGS["evidence boundaries<br/>ffmpeg scdet + speech gaps"]
+    end
+
+    ARTIFACT[("report.json<br/>video-learning.report/v1")]
+
+    subgraph QUERY["search — repeatable, no media tools"]
+        LOAD["saved evidence reloaded<br/>ReportStore.load_evidence<br/>build_study_evidence"]
+        BM25["lexical ranking<br/>Okapi BM25<br/>no stemming, embeddings<br/>or semantic search"]
+        HITS["timestamped results<br/>OCR points<br/>speech intervals"]
+    end
+
+    VIDEO --> OCR
+    VIDEO --> SPEECH
+    VIDEO --> SEGS
+    SPEECH -->|"speech gaps"| SEGS
+    OCR --> ARTIFACT
+    SPEECH --> ARTIFACT
+    SEGS --> ARTIFACT
+    ARTIFACT --> LOAD
+    LOAD --> BM25
+    BM25 --> HITS
+```
+
+Nothing crosses from `VIDEO` into the search subgraph: a query reads only the
+artifact. Transcription is the one pass that may be unavailable; OCR points are
+still written, and segmentation still runs with no speech gaps to merge.
 
 `core/study_guide.py` and `core/quiz.py` (with their services) exist as library
 code and are covered by unit tests, but **no CLI command exposes them yet**.
