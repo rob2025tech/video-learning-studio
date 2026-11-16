@@ -16,6 +16,66 @@ media work is delegated to external binaries (`ffprobe`, `ffmpeg`,
 network call, no model is ever downloaded, and there is no cloud fallback. The
 source video is only ever read — never renamed, moved, or modified.
 
+## Quick start
+
+```bash
+uv sync
+uv run video-learning report "/path/to/clip.mov" --out report.json
+uv run video-learning search report.json "a phrase from the video"
+```
+
+`uv sync` installs the two Python dependencies. In this workflow, `report` opens
+the video: it samples frames, reads their text, transcribes speech, and detects
+boundaries, then writes everything into one JSON artifact. Each `search` after it
+reads that artifact and re-runs none of that work. Spoken-audio transcription
+needs both an installed, usable `whisper-cli` on `PATH` **and** a configured
+compatible ggml model — pass `--model /path/to/ggml-model.bin` or export
+`VLS_WHISPER_MODEL`.
+
+Which external binary each command needs, and how to install it, is in
+[Requirements](#requirements); the annotated walk-through is in
+[End-to-end example, annotated](#end-to-end-example-annotated).
+
+**Transcription is optional by design.** Without `whisper-cli`, or without a
+configured model, `report` still succeeds and still produces a searchable
+artifact: it records `transcription.status` as `unavailable` together with the
+reason, and the on-screen text it did read is stored and ranked exactly as it
+would be alongside speech evidence.
+
+### Sample output
+
+This is real CLI output, produced from the project's own synthetic test fixture
+(`tests/unit/test_search_cli.py`) — one OCR snapshot and six transcript segments
+of invented sentences, with no real video involved. It is shown unwrapped; on a
+narrower terminal the two closing notes wrap.
+
+```console
+$ uv run video-learning search report.json "index locally"
+SEARCH
+────────────────────────────────
+Query:  index locally
+Source: clip.mov
+Status: ok
+
+00:00:00.5  OCR     build a search index locally
+  score 1.739 · segment 0 · matched index, locally
+00:00:00.0 → 00:00:03.0  SPEECH  the index ranks record 0
+  score 0.065 · segment 0 · matched index
+00:00:04.0 → 00:00:07.0  SPEECH  the index ranks record 1
+  score 0.065 · segment 0 · matched index
+00:00:08.0 → 00:00:11.0  SPEECH  the index ranks record 2
+  score 0.065 · segment 0 · matched index
+00:00:12.0 → 00:00:15.0  SPEECH  the index ranks record 3
+  score 0.065 · segment 0 · matched index
+
+Showing 5 of 7 matching records (limit 5); the limit caps what is returned, never what is considered.
+Read from the saved report artifact — the video was not opened and no frame extraction, OCR, transcription or segmentation was re-run.
+```
+
+An OCR record is one moment, so it prints a single timestamp; a speech record is
+a range. The OCR hit ranks first here because it is the only record carrying
+`locally`, while the speech records match on `index` alone.
+
 ## Architecture
 
 Five packages, with dependencies pointing inward:
@@ -403,7 +463,7 @@ printing evidence.
 `--json` emits exactly the result model, so stdout is strictly valid JSON and can
 be piped into another tool.
 
-## End-to-end example
+## End-to-end example, annotated
 
 Placeholders only — substitute your own paths.
 
@@ -491,6 +551,10 @@ established.
   `matched_spans`. This excerpting applies to `search` only; the `report`
   timeline continues to show a short preview of each OCR point and takes no
   match into account.
+- **`--json` carries an absolute source path.** A report artifact stores the
+  video's own path in its `source` field, and `search --json` echoes that path
+  back as `source`; the readable listing prints only the filename. Treat an
+  artifact you intend to share the way you would a shell history.
 
 ## Troubleshooting
 
@@ -554,5 +618,7 @@ test summary, including skipped tests, when evaluating a run.
   benchmark.
 
 Because integration tests depend on installed binaries and a configured model,
-a green local run and a green CI run do not necessarily exercise the same paths.
-Check the skip count before interpreting a result.
+the same commit can exercise different paths on different machines. This
+repository has no CI workflow, so no local run stands for any other one: check
+the skip count before interpreting a result, and run the suite yourself before
+treating any test count as evidence.
