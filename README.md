@@ -9,12 +9,14 @@ what is actually observable — media metadata, on-screen text, spoken words, an
 visual-change boundaries — and saves it as a plain JSON artifact. You can then
 search that artifact as often as you like without ever re-processing the video.
 
-The application runs locally. `uv sync` may access PyPI to install the two
-Python dependencies. The only Python dependencies are `typer` and `rich`; all
-media work is delegated to external binaries (`ffprobe`, `ffmpeg`,
-`tesseract`, `whisper-cli`) through `subprocess`. No module in `src/` makes a
-network call, no model is ever downloaded, and there is no cloud fallback. The
-source video is only ever read — never renamed, moved, or modified.
+The application runs locally. `uv sync` may access PyPI to install Python
+dependencies: the CLI needs only `typer` and `rich`, and a default sync adds the
+development group on top — test and lint tooling, plus the packages the optional
+local HTTP API uses. All media work is delegated to external binaries (`ffprobe`,
+`ffmpeg`, `tesseract`, `whisper-cli`) through `subprocess`. Nothing in `src/` calls a
+remote service, no model is ever downloaded, and there is no cloud fallback; the API
+listens on loopback only. The source video is only ever read — never renamed, moved,
+or modified.
 
 ## Quick start
 
@@ -24,7 +26,8 @@ uv run video-learning report "/path/to/clip.mov" --out report.json
 uv run video-learning search report.json "a phrase from the video"
 ```
 
-`uv sync` installs the two Python dependencies. In this workflow, `report` opens
+`uv sync` installs the CLI's two runtime dependencies and the development group.
+In this workflow, `report` opens
 the video: it samples frames, reads their text, transcribes speech, and detects
 boundaries, then writes everything into one JSON artifact. Each `search` after it
 reads that artifact and re-runs none of that work. Spoken-audio transcription

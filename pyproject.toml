@@ -9,14 +9,46 @@ dependencies = [
     "rich>=13.7",
 ]
 
+# The CLI's runtime dependencies stay exactly the two above. The web API is an extra, and
+# what installs it depends on the command (counts verified with `uv sync --dry-run`):
+#   uv sync                    -> 35 packages: base + the dev group, which repeats these, so a
+#                                      normal development sync DOES install the API stack
+#   uv sync --no-dev           -> 8 packages: base only (typer + rich); no API packages
+#   uv sync --extra api        -> 35: the same as a plain sync, because the dev group already
+#                                      carries these four. The extra is what a dev-group-less
+#                                      environment selects, not an addition to a default sync
+#   uv sync --no-dev --extra api -> 22: the API stack without the test/lint tooling
+#   uv pip install .           -> 8: base only; uv pip install '.[api]' -> 22, this extra
+# Nothing in cli/ imports video_learning.api. Both halves of that claim are enforced by
+# tests/unit/test_api_boundaries.py (static imports) and
+# tests/integration/test_cli_without_api_extra.py (the CLI run in an environment where
+# these packages are genuinely absent).
+[project.optional-dependencies]
+api = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7",
+]
+
 [project.scripts]
 video-learning = "video_learning.cli.main:app"
+video-learning-web = "video_learning.api.app:main"
 
 [dependency-groups]
+# The api pins are repeated here so `uv run pytest` / `uv run mypy` type-check and
+# exercise the API without requiring --extra api. This is also why a default `uv sync`
+# installs the API stack: the dev group carries it, not the extra.
+# httpx is Starlette TestClient's transport.
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
     "mypy>=1.11",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "pydantic>=2.7",
+    "httpx>=0.27",
 ]
 
 [build-system]

@@ -278,18 +278,29 @@ class ReportStore:
         # A decode failure is a ValueError, not an OSError, so it must be named here.
         except (OSError, UnicodeDecodeError) as exc:
             raise ReportArtifactError(f"Could not read report artifact '{path}': {exc}") from exc
+        return self.load_evidence_from_text(raw, label=str(path))
+
+    def load_evidence_from_text(self, raw: str, *, label: str) -> StudyEvidence:
+        """Same derivation as :meth:`load_evidence`, from text the caller already holds.
+
+        Split out so a caller that received the artifact as bytes (an HTTP upload, for
+        example) never has to write it to disk first. ``label`` names the artifact in
+        every error message and is display-only: it is never opened, resolved or joined
+        to a directory. Reading from a path passes ``str(path)``, so the messages a CLI
+        user sees are unchanged.
+        """
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise ReportArtifactError(
-                f"Report artifact '{path}' is not valid JSON: {exc}"
+                f"Report artifact '{label}' is not valid JSON: {exc}"
             ) from exc
         if not isinstance(data, dict):
-            raise ReportArtifactError(f"Report artifact '{path}' is not a JSON object.")
+            raise ReportArtifactError(f"Report artifact '{label}' is not a JSON object.")
         found = data.get("schema")
         if found != self.schema:
             raise ReportArtifactError(
-                f"Unsupported report artifact schema in '{path}': {found!r} "
+                f"Unsupported report artifact schema in '{label}': {found!r} "
                 f"(expected {self.schema!r})."
             )
         try:
@@ -302,9 +313,9 @@ class ReportStore:
             )
         except KeyError as exc:
             raise ReportArtifactError(
-                f"Report artifact '{path}' is missing the {exc.args[0]!r} section it needs."
+                f"Report artifact '{label}' is missing the {exc.args[0]!r} section it needs."
             ) from exc
         except (TypeError, ValueError) as exc:
             raise ReportArtifactError(
-                f"Report artifact '{path}' holds a value this version cannot interpret: {exc}"
+                f"Report artifact '{label}' holds a value this version cannot interpret: {exc}"
             ) from exc
