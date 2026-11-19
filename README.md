@@ -79,6 +79,41 @@ An OCR record is one moment, so it prints a single timestamp; a speech record is
 a range. The OCR hit ranks first here because it is the only record carrying
 `locally`, while the speech records match on `index` alone.
 
+## Local web UI (optional)
+
+The CLI is the primary interface. An optional browser UI (`frontend/`) lets you
+upload a report artifact, search its evidence, and play the original video
+alongside the results with click-to-seek. It is a thin client over the same
+local HTTP API the CLI's `search` uses; the video itself is never uploaded — the
+browser plays it through a local object URL.
+
+Two processes, two terminals, both from the repository root unless noted:
+
+```bash
+# Terminal 1 — the local evidence API (loopback only, port 8000)
+uv run video-learning-web
+
+# Terminal 2 — the Vite dev server (port 5173), from frontend/
+cd frontend
+npm ci          # first run only; installs from package-lock.json
+npm run dev
+```
+
+Then open <http://localhost:5173/>. The dev server proxies `/api/*` to
+`http://127.0.0.1:8000`, so the browser never talks to the API cross-origin.
+Check the API directly with `curl http://127.0.0.1:8000/api/health`. Stop each
+process with `Ctrl-C` in its terminal; neither writes to disk nor persists
+sessions, so stopping the API discards all loaded reports.
+
+**Node version.** The frontend toolchain requires Node
+`^22.22.2 || ^24.15.0 || >=26.0.0` (declared in `frontend/package.json`
+`engines`; the binding constraints are `jsdom`, `vitest` and its `undici`
+dependency, which need zlib Zstd support absent from Node 20). The known-good
+test environment is **Node 24.20.0**, pinned in `frontend/.nvmrc`
+(`nvm use` from `frontend/`); Node 22.22.3 is also verified. Node 20 is **not**
+supported for `npm test`. Run `npm test`, `npm run build`, and `npm run dev`
+from `frontend/` under a supported Node.
+
 ## Architecture
 
 Five packages, with dependencies pointing inward:
