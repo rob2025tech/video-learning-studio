@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any, NoReturn
 
 import pytest
 
@@ -34,6 +35,7 @@ from video_learning.core.transcript import (
     TranscriptResult,
     TranscriptSegment,
 )
+from video_learning.services import report_service as report_service_module
 from video_learning.services.analyze_service import AnalyzeResult, FrameSnapshot
 from video_learning.services.report_service import REPORT_SCHEMA, ReportService, ReportStore
 
@@ -527,6 +529,264 @@ def test_inspect_failure_propagates(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError_):
         service.build(tmp_path / "nope.mov")
+
+
+# -- stage callbacks (M3.4) ----------------------------------------------------
+
+
+_ALL_STAGES = ["inspect", "ocr", "transcribe", "segment", "timeline", "done"]
+
+
+def _boom_timeline(*_args: Any, **_kwargs: Any) -> NoReturn:
+    """Stands in for ``build_timeline`` to make the timeline stage failable."""
+    raise RuntimeError("timeline blew up")
+
+
+def _refuse_report(*_args: Any, **_kwargs: Any) -> NoReturn:
+    """Stands in for the ``ReportResult`` constructor to simulate assembly failure."""
+    raise RuntimeError("cannot assemble the report")
+
+
+def test_on_stage_receives_stages_in_pipeline_order(tmp_path: Path) -> None:
+    stages: list[str] = []
+    service, *_ = _service(
+        tmp_path, transcript=_transcript(TranscriptSegment(0.0, 1.0, "hi"))
+    )
+
+    report = service.build(tmp_path / "clip.mov", on_stage=stages.append)
+
+    # Five stage names in pipeline order, then "done" once the report is built.
+    assert stages == _ALL_STAGES
+    assert report.transcription_status == "ok"
+
+
+def test_stage_notification_precedes_the_work_it_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One log receives BOTH the callback emission and the real stage work, so this
+    # asserts interleaving (the notification marks the stage that is STARTING), not
+    # merely that the callback list has the right contents. build_timeline is pure
+    # in-service work, so it is wrapped (and delegated to) to give it a log entry too.
+    log: list[str] = []
+
+    real_build_timeline = report_service_module.build_timeline
+
+    def timed_build_timeline(*args: Any, **kwargs: Any) -> Any:
+        log.append("call:timeline")
+        return real_build_timeline(*args, **kwargs)
+
+    monkeypatch.setattr(report_service_module, "build_timeline", timed_build_timeline)
+
+    class TimingInspect:
+        def inspect(self, path: Path) -> MediaInfo:
+            log.append("call:inspect")
+            return _media(tmp_path)
+
+    class TimingAnalyze:
+        def analyze(self, path: Path) -> AnalyzeResult:
+            log.append("call:ocr")
+            return _analysis(tmp_path)
+
+    class TimingTranscribe:
+        def transcribe(self, path: Path, *, model: Path | None = None) -> TranscriptResult:
+            log.append("call:transcribe")
+            return _transcript(TranscriptSegment(0.0, 1.0, "hi"))
+
+    class TimingSegment:
+        def segment(self, media: MediaInfo, transcription: TranscriptResult | None) -> Segmentation:
+            log.append("call:segment")
+            return Segmentation(
+                visual_changes=(),
+                speech_boundaries=(),
+                boundaries=(),
+                segments=(),
+                video_duration_seconds=None,
+            )
+
+    service = ReportService(
+        inspect_service=TimingInspect(),  # type: ignore[arg-type]
+        analyze_service=TimingAnalyze(),  # type: ignore[arg-type]
+        transcribe_service=TimingTranscribe(),  # type: ignore[arg-type]
+        segment_service=TimingSegment(),  # type: ignore[arg-type]
+        whisper=FakeWhisper(_capability(ready=True)),  # type: ignore[arg-type]
+    )
+
+    service.build(tmp_path / "clip.mov", on_stage=lambda stage: log.append(f"notify:{stage}"))
+
+    # Each notify: entry sits immediately before its call. Only "done" has no call
+    # entry (it follows ReportResult assembly, which has no external seam here); its
+    # position last proves it is emitted only after the whole build succeeded.
+    assert log == [
+        "notify:inspect",
+        "call:inspect",
+        "notify:ocr",
+        "call:ocr",
+        "notify:transcribe",
+        "call:transcribe",
+        "notify:segment",
+        "call:segment",
+        "notify:timeline",
+        "call:timeline",
+        "notify:done",
+    ]
+
+
+@pytest.mark.parametrize("transcript", [None, _transcript(TranscriptSegment(0.0, 1.0, "hi"))])
+def test_no_callback_paths_stay_unchanged(
+    tmp_path: Path, transcript: TranscriptResult | None
+) -> None:
+    # Default behavior (no callback at all, and explicit on_stage=None) is a
+    # no-op: identical serialized reports, and the callback-free build works.
+    service, *_ = _service(tmp_path, has_audio=transcript is not None, transcript=transcript)
+
+    plain = service.build(tmp_path / "clip.mov")
+    explicit_none = service.build(tmp_path / "clip.mov", on_stage=None)
+
+    assert plain.to_dict() == explicit_none.to_dict()
+
+
+@pytest.mark.parametrize(
+    ("has_audio", "ready", "status"),
+    [
+        (False, True, "no-audio"),  # silent video: transcription is skipped outright
+        (True, False, "unavailable"),  # audio but no usable local backend/model
+    ],
+    ids=["no-audio", "backend-unavailable"],
+)
+def test_callback_receives_stages_even_when_transcription_is_skipped(
+    tmp_path: Path, has_audio: bool, ready: bool, status: str
+) -> None:
+    # The stage contract is about the pipeline, not about whether each backend ran:
+    # both skip paths still emit every stage plus "done". The status assertion proves
+    # each case really exercised the skip it is named for.
+    stages: list[str] = []
+    service, *_ = _service(tmp_path, has_audio=has_audio, ready=ready)
+
+    report = service.build(tmp_path / "clip.mov", on_stage=stages.append)
+
+    assert stages == _ALL_STAGES
+    assert report.transcription_status == status
+    assert report.transcription is None
+
+
+def test_raising_callback_never_breaks_the_report(tmp_path: Path) -> None:
+    service, *_ = _service(
+        tmp_path, transcript=_transcript(TranscriptSegment(0.0, 1.0, "hi"))
+    )
+    reference = service.build(tmp_path / "clip.mov").to_dict()
+    calls: list[str] = []
+
+    def explode(stage: str) -> None:
+        calls.append(stage)
+        raise RuntimeError(f"broken progress hook at {stage}")
+
+    # Safety policy: a callback that raises on EVERY stage is ignored; the
+    # remaining stages keep firing and the report is byte-for-byte unchanged.
+    report = service.build(tmp_path / "clip.mov", on_stage=explode)
+
+    assert calls == _ALL_STAGES
+    assert report.to_dict() == reference
+
+
+def test_keyboard_interrupt_from_callback_still_propagates(tmp_path: Path) -> None:
+    # Only Exception subclasses are swallowed; BaseException signals such as
+    # KeyboardInterrupt must never be hidden by the progress hook.
+    def interrupt(stage: str) -> None:
+        raise KeyboardInterrupt
+
+    service, *_ = _service(tmp_path, transcript=_transcript())
+
+    with pytest.raises(KeyboardInterrupt):
+        service.build(tmp_path / "clip.mov", on_stage=interrupt)
+
+
+def test_system_exit_from_callback_still_propagates(tmp_path: Path) -> None:
+    # The hook suppresses Exception, not BaseException, so an exit request raised
+    # by a consumer is never swallowed either — and it keeps its own exit code.
+    def exit_now(stage: str) -> None:
+        raise SystemExit(3)
+
+    service, *_ = _service(tmp_path, transcript=_transcript())
+
+    with pytest.raises(SystemExit) as exit_info:
+        service.build(tmp_path / "clip.mov", on_stage=exit_now)
+
+    assert exit_info.value.code == 3
+
+
+@pytest.mark.parametrize(
+    "failing_stage", ["inspect", "ocr", "transcribe", "segment", "timeline"]
+)
+def test_failing_stage_is_reported_as_the_active_stage(
+    tmp_path: Path, failing_stage: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Because each name is emitted before its work starts, the stage that raises is
+    # the LAST one notified — exactly what a progress UI needs in order to show the
+    # stage that was in flight when the build failed.
+    stages: list[str] = []
+
+    class Boom:
+        def inspect(self, path: Path) -> MediaInfo:
+            raise RuntimeError("inspect blew up")
+
+        def analyze(self, path: Path) -> AnalyzeResult:
+            raise RuntimeError("ocr blew up")
+
+        def transcribe(self, path: Path, *, model: Path | None = None) -> TranscriptResult:
+            raise RuntimeError("transcribe blew up")
+
+        def segment(
+            self, media: MediaInfo, transcription: TranscriptResult | None
+        ) -> Segmentation:
+            raise RuntimeError("segment blew up")
+
+    boom = Boom()
+    parts: dict[str, object] = {
+        "inspect": FakeInspect(_media(tmp_path)),
+        "ocr": FakeAnalyze(_analysis(tmp_path)),
+        "transcribe": FakeTranscribe(result=_transcript()),
+        "segment": FakeSegment(),
+    }
+    if failing_stage == "timeline":
+        # The timeline stage is pure in-service computation, so its seam is the
+        # module-level build_timeline that ReportService.build resolves at call time.
+        monkeypatch.setattr(report_service_module, "build_timeline", _boom_timeline)
+    else:
+        parts[failing_stage] = boom
+    service = ReportService(
+        inspect_service=parts["inspect"],  # type: ignore[arg-type]
+        analyze_service=parts["ocr"],  # type: ignore[arg-type]
+        transcribe_service=parts["transcribe"],  # type: ignore[arg-type]
+        segment_service=parts["segment"],  # type: ignore[arg-type]
+        whisper=FakeWhisper(_capability(ready=True)),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(RuntimeError, match=f"{failing_stage} blew up"):
+        service.build(tmp_path / "clip.mov", on_stage=stages.append)
+
+    assert stages == _ALL_STAGES[: _ALL_STAGES.index(failing_stage) + 1]
+    assert stages[-1] == failing_stage
+    assert "done" not in stages
+
+
+def test_done_is_not_emitted_when_the_report_cannot_be_assembled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # "done" asserts that the ReportResult exists, so it must FOLLOW construction
+    # rather than merely be the last name in the list: when construction raises,
+    # all five stage names are notified and "done" is not.
+    stages: list[str] = []
+    service, *_ = _service(
+        tmp_path, transcript=_transcript(TranscriptSegment(0.0, 1.0, "hi"))
+    )
+
+    monkeypatch.setattr(report_service_module, "ReportResult", _refuse_report)
+
+    with pytest.raises(RuntimeError, match="cannot assemble the report"):
+        service.build(tmp_path / "clip.mov", on_stage=stages.append)
+
+    assert stages == ["inspect", "ocr", "transcribe", "segment", "timeline"]
+    assert "done" not in stages
 
 
 # -- store -------------------------------------------------------------------

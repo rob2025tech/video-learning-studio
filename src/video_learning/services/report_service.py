@@ -24,10 +24,12 @@ no cloud fallback.
 
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from video_learning.adapters.whisper_cpp import WhisperCpp
 from video_learning.core.errors import ReportArtifactError, TranscriptionError
@@ -47,6 +49,17 @@ from video_learning.services.segment_service import SegmentService
 from video_learning.services.transcribe_service import TranscribeService
 
 REPORT_SCHEMA = "video-learning.report/v1"
+
+# The ordered progress stages emitted by :meth:`ReportService.build`. Each name
+# marks the point *immediately before* that stage's work starts (``done`` is
+# emitted only once the report is fully assembled), so a consumer can show the
+# stage actually in flight rather than the last one that finished.
+ReportStage = Literal["inspect", "ocr", "transcribe", "segment", "timeline", "done"]
+
+# A synchronous progress hook. Callback exceptions are swallowed by
+# :meth:`ReportService._notify` (see its docstring for the policy), so a raising
+# hook can never corrupt or abort an otherwise-good report build.
+StageCallback = Callable[[ReportStage], None]
 
 # Fixed, deterministic detail for the rare case where capability was ready but
 # transcription still failed at runtime. We deliberately do NOT interpolate the
@@ -175,16 +188,39 @@ class ReportService:
         self._segment = segment_service
         self._whisper = whisper
 
-    def build(self, path: Path, *, model: Path | None = None) -> ReportResult:
+    def build(
+        self,
+        path: Path,
+        *,
+        model: Path | None = None,
+        on_stage: StageCallback | None = None,
+    ) -> ReportResult:
+        """Assemble the report, optionally notifying ``on_stage`` before each stage.
+
+        ``on_stage`` is a pure progress hook: when it is ``None`` (the default)
+        the build behaves exactly as before — same stages, same order, same
+        deterministic report. Each name is emitted immediately *before* the work
+        it names starts, in pipeline order (``inspect``, ``ocr``, ``transcribe``,
+        ``segment``, ``timeline``), and ``done`` only after the report has been
+        built successfully. A stage that raises therefore leaves its own
+        notification as the last one emitted, which identifies it as the stage
+        that was running.
+        """
+        self._notify(on_stage, "inspect")
         media = self._inspect.inspect(path)  # reuse Stage 0A
+
+        self._notify(on_stage, "ocr")
         analysis = self._analyze.analyze(path)  # reuse Stage 0D/0F
 
+        self._notify(on_stage, "transcribe")
         transcription, status, detail = self._transcription_evidence(path, media, model)
 
         # Stage 0I reuses the MediaInfo and transcript already gathered above; it
         # never re-runs inspection, analysis, or transcription.
+        self._notify(on_stage, "segment")
         segmentation = self._segment.segment(media, transcription)
 
+        self._notify(on_stage, "timeline")
         timeline = build_timeline(
             [
                 OcrEvent(timestamp_seconds=snapshot.timestamp_seconds, text=snapshot.ocr_text)
@@ -199,7 +235,7 @@ class ReportService:
                 for segment in (transcription.segments if transcription is not None else ())
             ],
         )
-        return ReportResult(
+        report = ReportResult(
             source=path,
             media=media,
             analysis=analysis,
@@ -209,6 +245,24 @@ class ReportService:
             segmentation=segmentation,
             timeline=timeline,
         )
+        self._notify(on_stage, "done")
+        return report
+
+    @staticmethod
+    def _notify(on_stage: StageCallback | None, stage: ReportStage) -> None:
+        """Emit ``stage`` to ``on_stage`` if supplied, swallowing callback errors.
+
+        The agreed safety policy: progress observation must never change the
+        outcome of a report build. A callback that raises is treated as a broken
+        observer, not a pipeline failure — the exception is caught and ignored
+        (only :class:`Exception`; ``KeyboardInterrupt``/``SystemExit`` still
+        propagate) and the remaining stages continue normally.
+        """
+        if on_stage is None:
+            return
+        # Deliberately silent: the report, not the hook, is the product.
+        with contextlib.suppress(Exception):
+            on_stage(stage)
 
     def _transcription_evidence(
         self, path: Path, media: MediaInfo, model: Path | None
